@@ -13,27 +13,34 @@ const {
   mediaFromFile,
   isReady,
   randomDelay,
-  waitForQr // ✅ IMPORTAÇÃO QUE FALTAVA
+  waitForQr
 } = require("./bot");
 
 const router = express.Router();
 
+/**
+ * ===============================
+ * 📤 UPLOAD
+ * ===============================
+ */
 const upload = multer({
   dest: path.join(__dirname, "uploads"),
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
 const safeUnlink = (file) => {
-  try { fs.existsSync(file) && fs.unlinkSync(file); } catch {}
+  try {
+    fs.existsSync(file) && fs.unlinkSync(file);
+  } catch {}
 };
 
 /**
- * 🔓 STATUS PÚBLICO DA API
- * GET /api/
+ * ===============================
+ * 🔓 STATUS PÚBLICO
+ * ===============================
  */
 router.get("/", (_, res) => {
   const status = getStatus();
-
   res.json({
     api: "online",
     bot: status.state,
@@ -42,11 +49,13 @@ router.get("/", (_, res) => {
 });
 
 /**
- * Resolve destino
+ * ===============================
+ * 🔎 RESOLVE CHAT ID
+ * ===============================
  */
 function resolveChatId(input) {
   if (!input) return null;
-  if (input.endsWith("@g.us")) return input;
+  if (input.endsWith("@g.us") || input.endsWith("@s.whatsapp.net")) return input;
 
   const clean = input.replace(/\D/g, "");
 
@@ -62,7 +71,9 @@ function resolveChatId(input) {
 }
 
 /**
- * Parse de menções
+ * ===============================
+ * 🏷 PARSE DE MENÇÕES
+ * ===============================
  */
 function parseMentions(text = "") {
   const mentions = [];
@@ -80,32 +91,23 @@ function parseMentions(text = "") {
 }
 
 /**
- * 🔐 ROTAS PROTEGIDAS
+ * ===============================
+ * 🔐 START (COM ESPERA DE QR)
+ * ===============================
  */
 router.post("/start", authServer, async (_, res) => {
   try {
-    // já conectado
     if (isReady()) {
-      return res.json({
-        success: true,
-        state: "ready",
-        qr: null
-      });
+      return res.json({ success: true, state: "ready", qr: null });
     }
 
     await startBot();
 
-    // se QR já existir
     const status = getStatus();
     if (status.qr) {
-      return res.json({
-        success: true,
-        state: "qr",
-        qr: status.qr
-      });
+      return res.json({ success: true, state: "qr", qr: status.qr });
     }
 
-    // aguarda gerar QR
     const qr = await waitForQr(30000);
 
     res.json({
@@ -115,13 +117,15 @@ router.post("/start", authServer, async (_, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
+/**
+ * ===============================
+ * 📩 SEND MESSAGE
+ * ===============================
+ */
 router.post("/send", authServer, upload.single("image"), async (req, res) => {
   if (!isReady()) {
     req.file && safeUnlink(req.file.path);
@@ -166,7 +170,9 @@ router.post("/send", authServer, upload.single("image"), async (req, res) => {
 });
 
 /**
- * 🔌 DESCONECTA E FORÇA NOVO QR
+ * ===============================
+ * 🔌 DISCONNECT
+ * ===============================
  */
 router.post("/disconnect", authServer, async (_, res) => {
   await disconnectBot();

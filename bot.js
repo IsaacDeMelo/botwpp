@@ -16,7 +16,11 @@ let qrCode = null;
 let ready = false;
 let connecting = false;
 
-// listeners aguardando QR
+/**
+ * ===============================
+ * 🔁 CONTROLE DE QR (Promise-based)
+ * ===============================
+ */
 let qrWaiters = [];
 
 function resolveQrWaiters(qr) {
@@ -29,20 +33,45 @@ function waitForQr(timeout = 30000) {
     if (qrCode) return resolve(qrCode);
     if (ready) return resolve(null);
 
-    const timer = setTimeout(() => {
-      qrWaiters = qrWaiters.filter(r => r !== resolver);
-      reject(new Error("Timeout ao gerar QR Code"));
-    }, timeout);
-
     const resolver = (qr) => {
       clearTimeout(timer);
       resolve(qr);
     };
 
+    const timer = setTimeout(() => {
+      qrWaiters = qrWaiters.filter(r => r !== resolver);
+      reject(new Error("Timeout ao gerar QR Code"));
+    }, timeout);
+
     qrWaiters.push(resolver);
   });
 }
 
+/**
+ * ===============================
+ * ⏱ Delay humano (1–3s)
+ * ===============================
+ */
+function randomDelay(min = 1000, max = 3000) {
+  const ms = min + Math.floor(Math.random() * (max - min));
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * ===============================
+ * 🖼️ Lê imagem para envio VISÍVEL
+ * ===============================
+ */
+async function mediaFromFile(filePath) {
+  const buffer = fs.readFileSync(filePath);
+  return { image: buffer };
+}
+
+/**
+ * ===============================
+ * 🚀 START BOT
+ * ===============================
+ */
 async function startBot() {
   if (sock || connecting) return sock;
   connecting = true;
@@ -55,12 +84,15 @@ async function startBot() {
 
   sock = makeWASocket({
     auth: state,
+
     browser: ["Safari", "macOS", "1.0"],
+
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
     markOnlineOnConnect: false,
     syncFullHistory: false,
     emitOwnEvents: false,
+    generateHighQualityLinkPreview: false,
     shouldSyncHistoryMessage: () => false,
     getMessage: async () => undefined
   });
@@ -79,6 +111,7 @@ async function startBot() {
       ready = true;
       qrCode = null;
       connecting = false;
+      console.log("✅ WhatsApp conectado");
     }
 
     if (connection === "close") {
@@ -97,6 +130,11 @@ async function startBot() {
   return sock;
 }
 
+/**
+ * ===============================
+ * 🧠 HELPERS
+ * ===============================
+ */
 function isReady() {
   return ready;
 }
@@ -114,17 +152,26 @@ function getStatus() {
 }
 
 async function disconnectBot() {
-  try { await sock?.logout(); } catch {}
+  try {
+    await sock?.logout();
+  } catch {}
   sock = null;
   ready = false;
   qrCode = null;
 }
 
+/**
+ * ===============================
+ * 📦 EXPORTS
+ * ===============================
+ */
 module.exports = {
   startBot,
   getClient,
   getStatus,
   isReady,
   waitForQr,
-  disconnectBot
+  disconnectBot,
+  randomDelay,
+  mediaFromFile
 };
