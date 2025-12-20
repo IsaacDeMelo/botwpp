@@ -18,7 +18,7 @@ async function send({
   message,
   token,
   imagePath = null,
-  apiUrl = "http://localhost:3006/api/send"
+  apiUrl = "https://api-midiaadtab-whatsapp.onrender.com/api/send"
 }) {
   if (!number) {
     throw new Error("Parâmetro 'number' é obrigatório");

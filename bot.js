@@ -6,7 +6,6 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const pino = require("pino");
-const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 const path = require("path");
 
@@ -17,37 +16,30 @@ let qrCode = null;
 let ready = false;
 let connecting = false;
 
-/**
- * Delay humano (1–3s)
- */
-function randomDelay() {
-  const ms = 1000 + Math.floor(Math.random() * 2000);
-  return new Promise(r => setTimeout(r, ms));
+// listeners aguardando QR
+let qrWaiters = [];
+
+function resolveQrWaiters(qr) {
+  qrWaiters.forEach(r => r(qr));
+  qrWaiters = [];
 }
 
-/**
- * Limpa arquivos antigos da auth_data
- * Mantém apenas creds.json e arquivos recentes
- */
-function cleanOldAuthFiles(maxAgeHours = 24) {
-  if (!fs.existsSync(AUTH_DIR)) return;
+function waitForQr(timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    if (qrCode) return resolve(qrCode);
+    if (ready) return resolve(null);
 
-  const now = Date.now();
-  const maxAge = maxAgeHours * 60 * 60 * 1000;
+    const timer = setTimeout(() => {
+      qrWaiters = qrWaiters.filter(r => r !== resolver);
+      reject(new Error("Timeout ao gerar QR Code"));
+    }, timeout);
 
-  fs.readdirSync(AUTH_DIR).forEach(file => {
-    if (file === "creds.json") return;
+    const resolver = (qr) => {
+      clearTimeout(timer);
+      resolve(qr);
+    };
 
-    const filePath = path.join(AUTH_DIR, file);
-
-    try {
-      const stat = fs.statSync(filePath);
-      const age = now - stat.mtimeMs;
-
-      if (age > maxAge) {
-        fs.unlinkSync(filePath);
-      }
-    } catch {}
+    qrWaiters.push(resolver);
   });
 }
 
@@ -63,17 +55,12 @@ async function startBot() {
 
   sock = makeWASocket({
     auth: state,
-
-    // Browser leve
     browser: ["Safari", "macOS", "1.0"],
-
-    // Silêncio + performance
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
     markOnlineOnConnect: false,
     syncFullHistory: false,
     emitOwnEvents: false,
-    generateHighQualityLinkPreview: false,
     shouldSyncHistoryMessage: () => false,
     getMessage: async () => undefined
   });
@@ -85,20 +72,13 @@ async function startBot() {
 
     if (qr) {
       qrCode = qr;
-      console.clear();
-      console.log("📱 Escaneie o QR Code:");
-      qrcode.generate(qr, { small: true });
+      resolveQrWaiters(qr);
     }
 
     if (connection === "open") {
       ready = true;
       qrCode = null;
       connecting = false;
-
-      // 🔥 LIMPEZA AUTOMÁTICA APÓS CONECTAR
-      cleanOldAuthFiles(24);
-
-      console.log("✅ WhatsApp conectado!");
     }
 
     if (connection === "close") {
@@ -127,7 +107,10 @@ function getClient() {
 }
 
 function getStatus() {
-  return { state: ready ? "ready" : "pending", qr: qrCode };
+  return {
+    state: ready ? "ready" : connecting ? "connecting" : "idle",
+    qr: qrCode
+  };
 }
 
 async function disconnectBot() {
@@ -137,17 +120,11 @@ async function disconnectBot() {
   qrCode = null;
 }
 
-async function mediaFromFile(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  return { image: buffer };
-}
-
 module.exports = {
   startBot,
-  disconnectBot,
   getClient,
   getStatus,
-  mediaFromFile,
   isReady,
-  randomDelay
+  waitForQr,
+  disconnectBot
 };

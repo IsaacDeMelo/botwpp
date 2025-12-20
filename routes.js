@@ -82,8 +82,43 @@ function parseMentions(text = "") {
  * 🔐 ROTAS PROTEGIDAS
  */
 router.post("/start", authServer, async (_, res) => {
-  await startBot();
-  res.json({ success: true });
+  try {
+    // já conectado
+    if (isReady()) {
+      return res.json({
+        success: true,
+        state: "ready",
+        qr: null
+      });
+    }
+
+    await startBot();
+
+    // se QR já existir
+    const status = getStatus();
+    if (status.qr) {
+      return res.json({
+        success: true,
+        state: "qr",
+        qr: status.qr
+      });
+    }
+
+    // aguarda gerar QR
+    const qr = await waitForQr(30000);
+
+    res.json({
+      success: true,
+      state: qr ? "qr" : "ready",
+      qr
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
 });
 
 router.post("/send", authServer, upload.single("image"), async (req, res) => {
