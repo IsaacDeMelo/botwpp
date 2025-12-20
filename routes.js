@@ -12,7 +12,8 @@ const {
   getStatus,
   mediaFromFile,
   isReady,
-  randomDelay
+  randomDelay,
+  waitForQr // ✅ IMPORTAÇÃO QUE FALTAVA
 } = require("./bot");
 
 const router = express.Router();
