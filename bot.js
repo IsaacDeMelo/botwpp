@@ -91,7 +91,17 @@ async function startBot() {
 
     browser: ["Safari", "macOS", "1.0"],
 
-    logger: pino({ level: "silent" }),
+    logger: pino({
+      level: "info",
+      transport: {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard"
+        }
+      }
+    }),
+
     printQRInTerminal: false,
     markOnlineOnConnect: false,
     syncFullHistory: false,
@@ -102,48 +112,54 @@ async function startBot() {
   });
 
   sock.ev.on("creds.update", saveCreds);
-
+  
+  //
   sock.ev.on("connection.update", (update) => {
+    console.log("🌐 CONNECTION UPDATE", update);
+
     const { connection, qr, lastDisconnect } = update;
 
     if (qr) {
+      console.log("📸 QR RECEBIDO");
       qrCode = qr;
       resolveQrWaiters(qr);
+    }
+
+    if (connection === "connecting") {
+      console.log("⏳ Conectando ao WhatsApp...");
     }
 
     if (connection === "open") {
       ready = true;
       qrCode = null;
       connecting = false;
-      console.log("✅ WhatsApp conectado");
+      console.log("✅ WHATSAPP AUTENTICADO E ONLINE");
     }
 
     if (connection === "close") {
-      const code = lastDisconnect?.error?.output?.statusCode;
+      const reason = lastDisconnect?.error?.output?.statusCode;
+      const message = lastDisconnect?.error?.message;
+
+      console.error("❌ CONEXÃO FECHADA", { reason, message });
 
       ready = false;
       sock = null;
       qrCode = null;
       connecting = false;
 
-      // Se a sessão foi invalidada, apagar tudo
-      if (code === DisconnectReason.loggedOut) {
+      if (reason === DisconnectReason.loggedOut) {
+        console.warn("🚨 LOGOUT DETECTADO — LIMPANDO SESSÃO");
         try {
-          if (fs.existsSync(AUTH_DIR)) {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            console.log("🧹 Sessão inválida — apagada");
-          }
+          fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         } catch (e) {
           console.error("Erro ao limpar sessão", e);
         }
       }
 
-      // Sempre permitir novo start
-      console.log("🔌 WhatsApp desconectado — pronto para novo QR");
+      console.log("🔄 Pronto para novo QR");
     }
-
-    //
   });
+
 
   return sock;
 }

@@ -156,6 +156,15 @@ router.post("/send", authServer, upload.single("image"), async (req, res) => {
     if (req.file) {
       const media = await mediaFromFile(req.file.path);
 
+      //OUTROS
+      console.log("📤 ENVIANDO", {
+        para: chatId,
+        texto: text,
+        temImagem: !!req.file,
+        mentions
+      });
+
+      //
       await sock.sendMessage(chatId, {
         image: media.image,
         caption: text || undefined,
@@ -171,7 +180,9 @@ router.post("/send", authServer, upload.single("image"), async (req, res) => {
     res.json({ success: true });
 
   } catch (err) {
+    console.error("❌ ERRO AO ENVIAR", err);
     res.status(500).json({ error: err.message });
+
 
   } finally {
     req.file && safeUnlink(req.file.path);
