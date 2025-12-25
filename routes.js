@@ -108,13 +108,22 @@ router.post("/start", authServer, async (_, res) => {
       return res.json({ success: true, state: "qr", qr: status.qr });
     }
 
-    const qr = await waitForQr(30000);
+    let qr = null;
+
+    try {
+      qr = await waitForQr(30000);
+    } catch {
+      // timeout → deixa o bot continuar tentando
+    }
+
+    const statusNovo = getStatus();
 
     res.json({
       success: true,
-      state: qr ? "qr" : "ready",
-      qr
+      state: statusNovo.qr ? "qr" : statusNovo.state,
+      qr: statusNovo.qr
     });
+
 
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

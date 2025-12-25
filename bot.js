@@ -73,7 +73,11 @@ async function mediaFromFile(filePath) {
  * ===============================
  */
 async function startBot() {
-  if (sock || connecting) return sock;
+  if (connecting) {
+    await waitForQr(15000).catch(() => {});
+    return sock;
+  }
+
   connecting = true;
 
   if (!fs.existsSync(AUTH_DIR)) {
@@ -115,16 +119,30 @@ async function startBot() {
     }
 
     if (connection === "close") {
+      const code = lastDisconnect?.error?.output?.statusCode;
+
       ready = false;
       sock = null;
       qrCode = null;
       connecting = false;
 
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.restartRequired) {
-        setTimeout(startBot, 2000);
+      // Se a sessão foi invalidada, apagar tudo
+      if (code === DisconnectReason.loggedOut) {
+        try {
+          if (fs.existsSync(AUTH_DIR)) {
+            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+            console.log("🧹 Sessão inválida — apagada");
+          }
+        } catch (e) {
+          console.error("Erro ao limpar sessão", e);
+        }
       }
+
+      // Sempre permitir novo start
+      console.log("🔌 WhatsApp desconectado — pronto para novo QR");
     }
+
+    //
   });
 
   return sock;
@@ -155,9 +173,20 @@ async function disconnectBot() {
   try {
     await sock?.logout();
   } catch {}
+
+  try {
+    if (fs.existsSync(AUTH_DIR)) {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      console.log("🧹 Sessão apagada");
+    }
+  } catch (err) {
+    console.error("Erro ao apagar sessão", err);
+  }
+
   sock = null;
   ready = false;
   qrCode = null;
+  connecting = false;
 }
 
 /**
