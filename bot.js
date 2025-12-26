@@ -73,6 +73,12 @@ async function mediaFromFile(filePath) {
  * ===============================
  */
 async function startBot() {
+  console.log("🚀 startBot() chamado", {
+    ready,
+    connecting,
+    hasSocket: !!sock
+  });
+
   if (connecting) {
     await waitForQr(15000).catch(() => {});
     return sock;
@@ -92,16 +98,8 @@ async function startBot() {
     browser: ["Safari", "macOS", "1.0"],
 
     logger: pino({
-      level: "info",
-      transport: {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "SYS:standard"
-        }
-      }
+      level: "info"
     }),
-
     printQRInTerminal: false,
     markOnlineOnConnect: false,
     syncFullHistory: false,
