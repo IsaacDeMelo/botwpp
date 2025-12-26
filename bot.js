@@ -134,28 +134,30 @@ async function startBot() {
       console.log("✅ WHATSAPP AUTENTICADO E ONLINE");
     }
 
+
+    //conexão fechada
     if (connection === "close") {
       const reason = lastDisconnect?.error?.output?.statusCode;
-      const message = lastDisconnect?.error?.message;
 
-      console.error("❌ CONEXÃO FECHADA", { reason, message });
-
-      ready = false;
-      sock = null;
-      qrCode = null;
-      connecting = false;
+      console.error("❌ CONEXÃO FECHADA", reason);
 
       if (reason === DisconnectReason.loggedOut) {
-        console.warn("🚨 LOGOUT DETECTADO — LIMPANDO SESSÃO");
-        try {
-          fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        } catch (e) {
-          console.error("Erro ao limpar sessão", e);
-        }
+        console.warn("🚨 LOGOUT — limpando sessão");
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        ready = false;
+        sock = null;
+        connecting = false;
+        return;
       }
 
-      console.log("🔄 Pronto para novo QR");
+      console.log("🔄 Reiniciando socket com sessão existente...");
+      ready = false;
+      connecting = false;
+
+      setTimeout(() => startBot(), 2000);
     }
+
+    //
   });
 
 
