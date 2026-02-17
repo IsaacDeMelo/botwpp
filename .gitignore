@@ -1,81 +1,91 @@
 # ===============================
-# Node.js
+# DEPENDÊNCIAS
 # ===============================
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+.pnp/
+.pnp.js
 
 # ===============================
-# Ambiente / Config
+# BUILD / DIST
+# ===============================
+dist/
+build/
+out/
+
+# ===============================
+# AMBIENTE / CONFIG
 # ===============================
 .env
 .env.*
 !.env.example
 
 # ===============================
-# Auth do WhatsApp (Baileys)
+# AUTH / SESSÃO (Baileys)
 # ===============================
-auth_data/
-baileys_auth/
-session/
-sessions/
+auth/
+*.session
+*.auth
 
 # ===============================
-# Uploads temporários
-# ===============================
-uploads/
-tmp/
-temp/
-
-# ===============================
-# Logs
+# LOGS
 # ===============================
 logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # ===============================
-# OS / Editor
+# QR / TESTES LOCAIS
 # ===============================
-.DS_Store
-Thumbs.db
-ehthumbs.db
-
-# VS Code
-.vscode/
-!.vscode/extensions.json
-
-# JetBrains
-.idea/
-*.iml
+teste.js
+qrcode.png
+qrcode*.png
 
 # ===============================
-# Build / Cache
+# NODemon
 # ===============================
-dist/
-build/
+.nodemon.json
+nodemon.json
+
+# ===============================
+# CACHE / TEMP
+# ===============================
+.tmp/
+.temp/
 .cache/
 .eslintcache
 
 # ===============================
-# Coverage / Tests
+# EDITORES / SO
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===============================
+# TYPESCRIPT (se usar no futuro)
+# ===============================
+*.tsbuildinfo
+
+# ===============================
+# COVERAGE / TESTES
 # ===============================
 coverage/
 .nyc_output/
 
 # ===============================
-# Arquivos sensíveis
+# FASTIFY / RUNTIME
 # ===============================
-*.pem
-*.key
-*.crt
+*.sock
+*.pid
 
 # ===============================
-# Outros
+# MISC
 # ===============================
-*.pid
-*.seed
-*.swp
-*.swo
-*.tmp
+*.bak
+*.old
+*.orig
