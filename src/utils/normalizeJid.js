@@ -9,9 +9,19 @@
  * - Status: status@broadcast
  */
 const USER_JID_REGEX = /^\d{5,20}(?::\d+)?@s\.whatsapp\.net$/;
-const GROUP_JID_REGEX = /^\d{5,30}-\d{5,30}@g\.us$/;
+const GROUP_JID_REGEX = /^\d{5,40}(?:-\d{1,40})?@g\.us$/;
 const BROADCAST_JID_REGEX = /^\d+@broadcast$/;
 const LID_JID_REGEX = /^[^@\s]+@lid$/;
+
+function safeJidForLog(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw.includes("@")) {
+    return "<without-domain>";
+  }
+
+  const [localPart, domain] = raw.split("@");
+  return `${"*".repeat(Math.min(localPart.length, 6))}@${domain}`;
+}
 
 function normalizePhoneNumber(value) {
   const number = String(value).replace(/\D/g, "");
@@ -44,6 +54,11 @@ export function normalizeJid(to) {
       return jid;
     }
 
+    console.warn("[normalizeJid] rejected jid", {
+      code: "TO_INVALID_JID",
+      jid: safeJidForLog(jid),
+      reason: "unsupported_jid_pattern"
+    });
     throw new Error("TO_INVALID_JID");
   }
 
