@@ -1,6 +1,7 @@
 // src/bailey/sendMedia.js
 import { normalizeJid } from "./normalizeJid.js";
 import { parseMentions } from "./parseMentions.js";
+import { normalizeMediaInput } from "./normalizeMediaInput.js";
 
 /**
  * Envia mensagens de mídia:
@@ -68,12 +69,22 @@ export async function sendMedia(
   }
 
   const jid = normalizeJid(to);
+  const normalized = normalizeMediaInput(media);
+
+  let payloadMediaType = safeMediaType;
+  let payloadMedia = normalized.media;
+
+  // WhatsApp nao renderiza SVG inline como imagem na maioria dos clientes.
+  // Nesses casos, envia como documento para manter compatibilidade.
+  if (safeMediaType === "image" && normalized.fromSvg) {
+    payloadMediaType = "document";
+  }
 
   // ===============================
   // BASE DO PAYLOAD
   // ===============================
   const content = {
-    [safeMediaType]: media,
+    [payloadMediaType]: payloadMedia,
     ...extraContent
   };
 
@@ -100,6 +111,12 @@ export async function sendMedia(
   // FLAGS OPCIONAIS
   // ===============================
   if (mimetype) content.mimetype = mimetype;
+  if (!mimetype && normalized.detectedMimeType) {
+    content.mimetype = normalized.detectedMimeType;
+  }
+  if (payloadMediaType === "document" && !content.fileName) {
+    content.fileName = normalized.fromSvg ? "image.svg" : "file";
+  }
   if (gifPlayback) content.gifPlayback = true;
   if (ptv) content.ptv = true;
   if (viewOnce) content.viewOnce = true;
@@ -110,7 +127,7 @@ export async function sendMedia(
     to: jid,
     messageId: result?.key?.id,
     type: "media",
-    mediaType: safeMediaType,
+    mediaType: payloadMediaType,
     status: "sent"
   };
 }

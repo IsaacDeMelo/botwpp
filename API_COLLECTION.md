@@ -93,7 +93,12 @@ Com mencao:
 
 Campos:
 - `mediaType`: `image | video | audio | document | sticker`
-- `media`: `{ "url": "..." }` (ou buffer/stream no backend)
+- `media`: aceita:
+  - `{ "url": "..." }`
+  - `{ "dataUrl": "data:image/png;base64,..." }`
+  - `{ "svg": "<svg ...>...</svg>" }` ou `{ "html": "<html>...<svg ...></svg>...</html>" }`
+  - string direta: `"data:image/png;base64,..."` ou `"<svg ...>...</svg>"`
+  - buffer/stream no backend
 - opcionais: `caption`, `mimetype`, `gifPlayback`, `ptv`, `viewOnce`
 
 Imagem:
@@ -106,6 +111,36 @@ Imagem:
   "caption": "Legenda"
 }
 ```
+
+Imagem por data URL (PNG):
+```json
+{
+  "type": "media",
+  "to": "5511999999999",
+  "mediaType": "image",
+  "media": {
+    "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+  },
+  "caption": "Imagem enviada em base64"
+}
+```
+
+SVG inline:
+```json
+{
+  "type": "media",
+  "to": "5511999999999",
+  "mediaType": "image",
+  "media": {
+    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\"><rect width=\"100%\" height=\"100%\" fill=\"#fff\"/><text x=\"20\" y=\"40\">Hello</text></svg>"
+  },
+  "caption": "SVG inline"
+}
+```
+
+Observacao de compatibilidade SVG:
+- Muitos clientes do WhatsApp nao renderizam SVG como imagem nativa.
+- Nesta API, quando `mediaType = image` e a origem e SVG, o envio e convertido para `document` automaticamente para evitar falha.
 
 Video com gifPlayback:
 ```json
@@ -153,6 +188,12 @@ Exemplo - Buttons + image:
   }
 }
 ```
+
+Observacao importante:
+- Quando enviar `image + caption + footer` sem `buttons/interactiveButtons/sections`, alguns clientes WhatsApp nao exibem o `footer` separado.
+- Nesta API, nesses casos, o `footer` e concatenado no final do `caption` automaticamente para garantir exibicao.
+- Em `content.image`, tambem sao aceitos `url`, `dataUrl`, `svg` e `html` contendo `<svg>`.
+- Se `content.image` vier em SVG inline, a API converte para `document` SVG para manter compatibilidade de envio.
 
 Exemplo - List Message:
 ```json
