@@ -2,6 +2,7 @@
 import { normalizeJid } from "./normalizeJid.js";
 import { parseMentions } from "./parseMentions.js";
 import { normalizeMediaInput } from "./normalizeMediaInput.js";
+import { normalizeSvgImageToPng } from "./svgToPng.js";
 
 /**
  * Envia mensagens de mídia:
@@ -73,11 +74,15 @@ export async function sendMedia(
 
   let payloadMediaType = safeMediaType;
   let payloadMedia = normalized.media;
+  let convertedFromSvg = false;
 
-  // WhatsApp nao renderiza SVG inline como imagem na maioria dos clientes.
-  // Nesses casos, envia como documento para manter compatibilidade.
-  if (safeMediaType === "image" && normalized.fromSvg) {
-    payloadMediaType = "document";
+  if (safeMediaType === "image") {
+    const pngFromSvg = await normalizeSvgImageToPng(media, normalized);
+    if (pngFromSvg?.convertedFromSvg) {
+      payloadMediaType = "image";
+      payloadMedia = pngFromSvg.media;
+      convertedFromSvg = true;
+    }
   }
 
   // ===============================
@@ -111,7 +116,13 @@ export async function sendMedia(
   // FLAGS OPCIONAIS
   // ===============================
   if (mimetype) content.mimetype = mimetype;
-  if (!mimetype && normalized.detectedMimeType) {
+  if (!mimetype && safeMediaType === "image" && payloadMediaType === "image") {
+    content.mimetype =
+      convertedFromSvg
+        ? "image/png"
+        : normalized.detectedMimeType || content.mimetype;
+  }
+  if (!mimetype && !content.mimetype && normalized.detectedMimeType) {
     content.mimetype = normalized.detectedMimeType;
   }
   if (payloadMediaType === "document" && !content.fileName) {

@@ -54,6 +54,7 @@ Content-Type para POST/DELETE com body:
 - `428 QR_REQUIRED`: esperando scan do QR
 - `401 LOGGED_OUT`: sessao caiu e precisa reconectar
 - `503 BOT_OFFLINE`: socket indisponivel
+- `SVG_TO_PNG_DEPENDENCY_MISSING_SHARP`: dependencia `sharp` nao instalada para rasterizar SVG em PNG
 
 ---
 
@@ -95,6 +96,7 @@ Campos:
 - `mediaType`: `image | video | audio | document | sticker`
 - `media`: aceita:
   - `{ "url": "..." }`
+  - `{ "svgUrl": "https://site.com/arte.svg" }` ou `{ "svg_url": "https://site.com/arte.svg" }`
   - `{ "dataUrl": "data:image/png;base64,..." }`
   - `{ "svg": "<svg ...>...</svg>" }` ou `{ "html": "<html>...<svg ...></svg>...</html>" }`
   - string direta: `"data:image/png;base64,..."` ou `"<svg ...>...</svg>"`
@@ -139,8 +141,8 @@ SVG inline:
 ```
 
 Observacao de compatibilidade SVG:
-- Muitos clientes do WhatsApp nao renderizam SVG como imagem nativa.
-- Nesta API, quando `mediaType = image` e a origem e SVG, o envio e convertido para `document` automaticamente para evitar falha.
+- Quando `mediaType = image` e a origem e SVG (`svg`, `html`, `data:image/svg+xml` ou URL `.svg`), a API rasteriza para `PNG` e envia como `image/png`.
+- O objetivo e garantir exibicao visual como imagem, evitando envio como documento SVG.
 
 Video com gifPlayback:
 ```json
@@ -193,7 +195,22 @@ Observacao importante:
 - Quando enviar `image + caption + footer` sem `buttons/interactiveButtons/sections`, alguns clientes WhatsApp nao exibem o `footer` separado.
 - Nesta API, nesses casos, o `footer` e concatenado no final do `caption` automaticamente para garantir exibicao.
 - Em `content.image`, tambem sao aceitos `url`, `dataUrl`, `svg` e `html` contendo `<svg>`.
-- Se `content.image` vier em SVG inline, a API converte para `document` SVG para manter compatibilidade de envio.
+- Se `content.image` vier em SVG (inline/data URL/url `.svg`), a API converte para `PNG` e envia como imagem nativa.
+
+Exemplo - Interactive com SVG inline (renderizado como PNG):
+```json
+{
+  "type": "interactive",
+  "to": "120363421971166966@g.us",
+  "content": {
+    "image": {
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1080\" height=\"1080\" viewBox=\"0 0 1080 1080\"><rect width=\"1080\" height=\"1080\" fill=\"#0a1220\"/></svg>"
+    },
+    "caption": "Imagem SVG renderizada como PNG no envio",
+    "footer": "Gerenciamento de escala"
+  }
+}
+```
 
 Exemplo - List Message:
 ```json

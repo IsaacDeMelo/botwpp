@@ -98,6 +98,14 @@ export function normalizeMediaInput(input) {
       return normalizeMediaInput(input.url);
     }
 
+    if (typeof input.svgUrl === "string") {
+      return normalizeMediaInput(input.svgUrl);
+    }
+
+    if (typeof input.svg_url === "string") {
+      return normalizeMediaInput(input.svg_url);
+    }
+
     if (typeof input.svg === "string") {
       return normalizeMediaInput(input.svg);
     }

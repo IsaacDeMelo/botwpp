@@ -32,3 +32,23 @@ test("keeps http URL as media url object", () => {
   assert.equal(normalized.detectedMimeType, null);
   assert.equal(normalized.fromSvg, false);
 });
+
+test("supports svgUrl key as URL source", () => {
+  const normalized = normalizeMediaInput({
+    svgUrl: "https://example.com/banner.svg"
+  });
+
+  assert.deepEqual(normalized.media, { url: "https://example.com/banner.svg" });
+  assert.equal(normalized.detectedMimeType, null);
+  assert.equal(normalized.fromSvg, false);
+});
+
+test("supports svg_url key as URL source", () => {
+  const normalized = normalizeMediaInput({
+    svg_url: "https://example.com/banner.svg"
+  });
+
+  assert.deepEqual(normalized.media, { url: "https://example.com/banner.svg" });
+  assert.equal(normalized.detectedMimeType, null);
+  assert.equal(normalized.fromSvg, false);
+});

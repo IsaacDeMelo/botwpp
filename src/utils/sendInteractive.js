@@ -2,6 +2,7 @@
 import { normalizeJid } from "./normalizeJid.js";
 import { parseMentions } from "./parseMentions.js";
 import { normalizeMediaInput } from "./normalizeMediaInput.js";
+import { normalizeSvgImageToPng } from "./svgToPng.js";
 /**
  * Envia QUALQUER mensagem interativa suportada pelo Baileys / Itsuki
  *
@@ -107,12 +108,17 @@ export async function sendInteractive(
 
     const normalized = normalizeMediaInput(safeContent[mediaField]);
 
-    if (mediaField === "image" && normalized.fromSvg) {
-      safeContent.document = normalized.media;
-      safeContent.fileName = safeContent.fileName || "image.svg";
-      safeContent.mimetype = safeContent.mimetype || "image/svg+xml";
-      delete safeContent.image;
-      continue;
+    if (mediaField === "image") {
+      const pngFromSvg = await normalizeSvgImageToPng(
+        safeContent[mediaField],
+        normalized
+      );
+
+      if (pngFromSvg?.convertedFromSvg) {
+        safeContent.image = pngFromSvg.media;
+        safeContent.mimetype = safeContent.mimetype || pngFromSvg.mimetype;
+        continue;
+      }
     }
 
     safeContent[mediaField] = normalized.media;
