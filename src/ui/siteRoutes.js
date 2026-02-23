@@ -1065,8 +1065,18 @@ textarea#builderTimeoutText{min-height:72px}
 }
 
 export function registerUiRoutes(app, { bailey, taskService }) {
-  const uiPasswordHash = String(process.env.UI_PASSWORD_HASH || "").trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(uiPasswordHash)) {
+  const uiPasswordHashFromEnv = String(process.env.UI_PASSWORD_HASH || "").trim().toLowerCase();
+  const uiPasswordPlain = String(process.env.UI_PASSWORD || "");
+  const isSha256Hex = (value) => /^[a-f0-9]{64}$/.test(String(value || ""));
+
+  let uiPasswordHash = uiPasswordHashFromEnv;
+
+  if (!isSha256Hex(uiPasswordHash) && uiPasswordPlain) {
+    uiPasswordHash = sha256(uiPasswordPlain);
+    app.log.warn("UI_PASSWORD_HASH missing or invalid. Falling back to UI_PASSWORD.");
+  }
+
+  if (!isSha256Hex(uiPasswordHash)) {
     throw new Error("UI_PASSWORD_HASH_NOT_SET_OR_INVALID");
   }
 

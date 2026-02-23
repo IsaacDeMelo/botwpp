@@ -11,8 +11,23 @@ services:
         value: 24.13.0
       - key: AUTH_TOKEN
         sync: false
+      - key: UI_PASSWORD_HASH
+        sync: false
+      - key: UI_PASSWORD
+        sync: false
       - key: APIFREELLM_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_TASKS_PERSISTENT_TABLE
+        sync: false
+      - key: SUPABASE_TASKS_PENDING_TABLE
+        sync: false
+      - key: SUPABASE_TASKS_EXPIRED_TABLE
+        sync: false
+      - key: SUPABASE_TASKS_COMPLETED_TABLE
         sync: false
       - key: PORT
         value: 10000
-
