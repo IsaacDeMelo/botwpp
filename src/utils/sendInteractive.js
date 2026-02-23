@@ -1,55 +1,18 @@
-// src/bailey/sendInteractive.js
+﻿// src/bailey/sendInteractive.js
 import { normalizeJid } from "./normalizeJid.js";
 import { parseMentions } from "./parseMentions.js";
 import { normalizeMediaInput } from "./normalizeMediaInput.js";
 import { normalizeSvgImageToPng } from "./svgToPng.js";
+import { applyTypingPresence } from "./sendPresence.js";
+
 /**
- * Envia QUALQUER mensagem interativa suportada pelo Baileys / Itsuki
- *
- * SUPORTA:
- * - Interactive Buttons (PIX, PAY, Galaxy, Flow, etc)
- * - Buttons Message / List / Cards
- * - Button Reply
- * - Product / Shop / Collection
- * - Location / Contact / Poll / Event / Payment
- * - Qualquer payload avancado da documentacao
- *
- * @param {BaileyClient} bailey
- * @param {Object} payload
+ * Envia payload interativo suportado pelo Baileys / Itsuki.
  */
 export async function sendInteractive(
   bailey,
   {
     to,
-
-    /**
-     * content = OBJETO EXATO DA DOCUMENTACAO
-     * Ex:
-     * {
-     *   text: '',
-     *   interactiveButtons: [...],
-     *   title,
-     *   footer,
-     *   image,
-     *   product,
-     *   location,
-     *   poll,
-     *   event,
-     *   shop,
-     *   collection,
-     *   buttons,
-     *   sections,
-     *   cards,
-     *   etc...
-     * }
-     */
     content,
-
-    /**
-     * options = MiscMessageGenerationOptions
-     * Ex:
-     * { quoted, ai, ephemeralExpiration, messageId }
-     */
     options = {}
   }
 ) {
@@ -66,21 +29,12 @@ export async function sendInteractive(
     throw new Error("SOCKET_NOT_AVAILABLE");
   }
 
-  // ===============================
-  // NORMALIZA JID
-  // ===============================
   const jid = normalizeJid(to);
 
-  // ===============================
-  // STATUS@BROADCAST
-  // ===============================
   if (jid === "status@broadcast") {
     return await sock.sendStatusMentions(content, content.jids || []);
   }
 
-  // ===============================
-  // MENCOES UNIVERSAIS @{}
-  // ===============================
   const safeContent = { ...content };
   let collectedMentions = [];
 
@@ -95,14 +49,12 @@ export async function sendInteractive(
     }
   }
 
-  // Injeta mencoes no payload (Baileys exige isso)
   if (collectedMentions.length) {
     safeContent.mentions = Array.from(
       new Set([...(safeContent.mentions || []), ...collectedMentions])
     );
   }
 
-  // Normaliza fontes de midia (url, data URL, svg/html inline).
   for (const mediaField of ["image", "video", "audio", "document", "sticker"]) {
     if (!safeContent[mediaField]) continue;
 
@@ -137,12 +89,9 @@ export async function sendInteractive(
   const hasInteractiveControls =
     (Array.isArray(safeContent.buttons) && safeContent.buttons.length > 0) ||
     (Array.isArray(safeContent.sections) && safeContent.sections.length > 0) ||
-    (Array.isArray(safeContent.interactiveButtons) &&
-      safeContent.interactiveButtons.length > 0) ||
-    (Array.isArray(safeContent.templateButtons) &&
-      safeContent.templateButtons.length > 0);
+    (Array.isArray(safeContent.interactiveButtons) && safeContent.interactiveButtons.length > 0) ||
+    (Array.isArray(safeContent.templateButtons) && safeContent.templateButtons.length > 0);
 
-  // Fallback para clientes que nao renderizam footer separado em midia sem botoes.
   if (
     hasMedia &&
     !hasInteractiveControls &&
@@ -163,6 +112,9 @@ export async function sendInteractive(
 
     delete safeContent.footer;
   }
+
+  const typingHint = safeContent.text || safeContent.caption || safeContent.footer || "";
+  await applyTypingPresence(sock, jid, typingHint);
 
   const result = await sock.sendMessage(jid, safeContent, options);
 

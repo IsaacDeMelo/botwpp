@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+﻿import { randomUUID } from "crypto";
 import { extractPhoneNumber, normalizeJid } from "../utils/normalizeJid.js";
 import { sendAny } from "../utils/sendAny.js";
 import {
@@ -12,10 +12,16 @@ import {
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_ACTION_TIMEOUT_MS = 8_000;
 const DEFAULT_CLEANUP_RETENTION_MS = 5 * 60_000;
+const DEFAULT_TIMEOUT_ACTION_RETRY_ATTEMPTS = 3;
+const DEFAULT_TIMEOUT_ACTION_RETRY_DELAY_MS = 1200;
 const TASK_DEBUG = String(process.env.TASK_DEBUG || "").toLowerCase() === "true";
 
 function nowMs() {
   return Date.now();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatTimestampBR(date = new Date()) {
@@ -25,10 +31,6 @@ function formatTimestampBR(date = new Date()) {
   const hh = String(date.getHours()).padStart(2, "0");
   const min = String(date.getMinutes()).padStart(2, "0");
   return `${dd}/${mm}/${yyyy} | ${hh}:${min}`;
-}
-
-function safeLower(value) {
-  return String(value || "").trim().toLowerCase();
 }
 
 function normalizeText(value) {
@@ -288,9 +290,9 @@ function logTaskDebug(message) {
 
 function logTaskRelated(senderJid, contentText, isRelated) {
   const when = formatTimestampBR(new Date());
-  const text = String(contentText || "<sem conteudo>");
+  const text = String(contentText || "<no-content>");
   console.log(
-    `${when} Mensagem do usuario [${senderJid}]: ${text} | TASK_RELATED=${isRelated ? "true" : "false"}`
+    `${when} Message from [${senderJid}]: ${text} | TASK_RELATED=${isRelated ? "true" : "false"}`
   );
 }
 
@@ -338,7 +340,7 @@ async function runWebhook(action, context) {
   }
 }
 
-async function runLocalSendAction(bailey, action, context) {
+async function runLocalSendAction({ bailey, action, context, onCreateTask }) {
   const payload = action?.payload && typeof action.payload === "object"
     ? { ...action.payload }
     : null;
@@ -354,10 +356,21 @@ async function runLocalSendAction(bailey, action, context) {
 
   try {
     const result = await sendAny(bailey, payload);
+    let createdTask = null;
+
+    if (onCreateTask && payload.awaitResponse) {
+      createdTask = onCreateTask({
+        requestBody: payload,
+        sendResult: result,
+        parentTaskId: context?.taskId || null
+      });
+    }
+
     return {
       ok: true,
       mode: "send",
-      result
+      result,
+      createdTaskId: createdTask?.id || null
     };
   } catch (error) {
     return {
@@ -368,14 +381,19 @@ async function runLocalSendAction(bailey, action, context) {
   }
 }
 
-async function runAction(bailey, action, context) {
+async function runAction({ bailey, action, context, onCreateTask }) {
   if (!action || typeof action !== "object") {
     return null;
   }
 
   const mode = String(action.mode || "").toLowerCase();
   if (mode === "send") {
-    return runLocalSendAction(bailey, action, context);
+    return runLocalSendAction({
+      bailey,
+      action,
+      context,
+      onCreateTask
+    });
   }
 
   if (action.url) {
@@ -395,10 +413,112 @@ async function runAction(bailey, action, context) {
   };
 }
 
+async function runActionWithRetries({
+  bailey,
+  action,
+  context,
+  onCreateTask,
+  attempts,
+  delayMs
+}) {
+  let lastResult = null;
+  let tries = Math.max(1, Number(attempts) || 1);
+
+  while (tries > 0) {
+    lastResult = await runAction({
+      bailey,
+      action,
+      context,
+      onCreateTask
+    });
+
+    if (lastResult?.ok) {
+      return {
+        ...lastResult,
+        _attemptsUsed: (Number(attempts) || 1) - tries + 1
+      };
+    }
+
+    tries -= 1;
+    if (tries > 0 && delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+
+  return {
+    ...(lastResult || {}),
+    _attemptsUsed: Math.max(1, Number(attempts) || 1)
+  };
+}
+
+function resolveTaskTimeoutMs(rawTimeoutMs, fallbackMs, persistent = false) {
+  if (persistent) {
+    return null;
+  }
+
+  if (rawTimeoutMs === null || rawTimeoutMs === false) {
+    return null;
+  }
+
+  if (rawTimeoutMs === undefined || rawTimeoutMs === "") {
+    return fallbackMs;
+  }
+
+  const parsed = Number(rawTimeoutMs);
+  if (!Number.isFinite(parsed)) {
+    return fallbackMs;
+  }
+
+  if (parsed <= 0) {
+    return null;
+  }
+
+  return Math.floor(parsed);
+}
+
+function resolveTaskExpiresAtMs(task) {
+  const explicitExpiresAtMs = Number(task?.expiresAtMs);
+  if (Number.isFinite(explicitExpiresAtMs) && explicitExpiresAtMs > 0) {
+    return explicitExpiresAtMs;
+  }
+
+  const expiresAtIso = String(task?.expiresAt || "").trim();
+  if (expiresAtIso) {
+    const parsed = Date.parse(expiresAtIso);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  const timeoutMs = Number(task?.timeoutMs);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return null;
+  }
+
+  const createdAtMs = Number(task?.createdAtMs);
+  if (Number.isFinite(createdAtMs) && createdAtMs > 0) {
+    return createdAtMs + timeoutMs;
+  }
+
+  const createdAtIso = String(task?.createdAt || "").trim();
+  if (!createdAtIso) {
+    return null;
+  }
+
+  const createdParsed = Date.parse(createdAtIso);
+  if (!Number.isFinite(createdParsed) || createdParsed <= 0) {
+    return null;
+  }
+
+  return createdParsed + timeoutMs;
+}
+
 export function createResponseTaskService({
   bailey,
   defaultTimeoutMs = DEFAULT_TIMEOUT_MS,
-  cleanupRetentionMs = DEFAULT_CLEANUP_RETENTION_MS
+  cleanupRetentionMs = DEFAULT_CLEANUP_RETENTION_MS,
+  timeoutActionRetryAttempts = Number(process.env.TIMEOUT_ACTION_RETRY_ATTEMPTS) || DEFAULT_TIMEOUT_ACTION_RETRY_ATTEMPTS,
+  timeoutActionRetryDelayMs = Number(process.env.TIMEOUT_ACTION_RETRY_DELAY_MS) || DEFAULT_TIMEOUT_ACTION_RETRY_DELAY_MS
 }) {
   if (!bailey) {
     throw new Error("BAILEY_REQUIRED");
@@ -408,6 +528,88 @@ export function createResponseTaskService({
   const retentionMs = Number(cleanupRetentionMs) || DEFAULT_CLEANUP_RETENTION_MS;
   let started = false;
   let interval = null;
+  let loopRunning = false;
+
+  const cancelOtherTemporaryTasks = ({ to, exceptTaskId = null, reason = "superseded" }) => {
+    const normalizedTo = normalizeJid(to);
+    const tasks = getAllTasks().filter(
+      (t) =>
+        ["pending", "attending"].includes(t.status) &&
+        t.to === normalizedTo &&
+        (!exceptTaskId || t.id !== exceptTaskId)
+    );
+
+    for (const task of tasks) {
+      updateTask(task.id, {
+        status: "cancelled",
+        cancelledAt: new Date().toISOString(),
+        notes: [task.notes, `auto_cancel_reason:${reason}`].filter(Boolean).join(" | ")
+      });
+    }
+  };
+
+  const createTaskFromSend = ({ requestBody, sendResult, parentTaskId = null }) => {
+    const cfg = requestBody?.awaitResponse;
+    if (!cfg || cfg === false) {
+      return null;
+    }
+
+    const to = normalizeJid(requestBody?.to || sendResult?.to);
+    const persistent = Boolean(cfg.persistent);
+    const ttl = resolveTaskTimeoutMs(cfg.timeoutMs, timeoutMs, persistent);
+    const createdAtMs = nowMs();
+
+    const inferredContent =
+      requestBody?.content && typeof requestBody.content === "object"
+        ? requestBody.content
+        : null;
+
+    const inferred = inferExpectedFromContent(inferredContent);
+    const expected = normalizeExpected(
+      Array.isArray(cfg.expected) && cfg.expected.length ? cfg.expected : inferred
+    );
+
+    if (!expected.length) {
+      throw new Error("AWAIT_RESPONSE_EXPECTED_REQUIRED");
+    }
+
+    if (!persistent) {
+      cancelOtherTemporaryTasks({
+        to,
+        exceptTaskId: parentTaskId,
+        reason: "new_temporary_task_created"
+      });
+    }
+
+    const task = {
+      id: randomUUID(),
+      status: persistent ? "persistent" : "pending",
+      to,
+      scope: inferScopeFromJid(to),
+      requestBodyType: requestBody?.type || "auto",
+      sentMessageId: sendResult?.messageId || null,
+      expected,
+      onTimeout:
+        cfg?.onTimeout && typeof cfg.onTimeout === "object"
+          ? cfg.onTimeout
+          : null,
+      createdAt: new Date(createdAtMs).toISOString(),
+      createdAtMs,
+      expiresAt: ttl ? new Date(createdAtMs + ttl).toISOString() : null,
+      expiresAtMs: ttl ? createdAtMs + ttl : null,
+      timeoutMs: ttl,
+      updatedAt: new Date(createdAtMs).toISOString(),
+      notes: cfg?.notes ? String(cfg.notes) : null,
+      triggerCount: 0,
+      lastTriggeredAt: null
+    };
+
+    saveTask(task);
+    console.log(
+      `${formatTimestampBR(new Date())} TASK_CREATED id=${task.id} status=${task.status} to=${task.to} sentMessageId=${task.sentMessageId || "-"} timeoutMs=${task.timeoutMs ?? "none"}`
+    );
+    return task;
+  };
 
   const expirePendingTasks = async () => {
     const tasks = getAllTasks();
@@ -415,20 +617,85 @@ export function createResponseTaskService({
 
     for (const task of tasks) {
       if (!["pending", "attending"].includes(task.status)) continue;
-      if (!task.expiresAtMs || task.expiresAtMs > now) continue;
+
+      const resolvedExpiresAtMs = resolveTaskExpiresAtMs(task);
+      if (!resolvedExpiresAtMs || resolvedExpiresAtMs > now) {
+        if (
+          resolvedExpiresAtMs &&
+          (!Number(task.expiresAtMs) || Number(task.expiresAtMs) !== resolvedExpiresAtMs)
+        ) {
+          updateTask(task.id, {
+            expiresAtMs: resolvedExpiresAtMs,
+            expiresAt: task.expiresAt || new Date(resolvedExpiresAtMs).toISOString()
+          });
+        }
+        continue;
+      }
 
       const updated = updateTask(task.id, {
         status: "expired",
-        expiredAt: new Date().toISOString()
+        expiredAt: new Date().toISOString(),
+        expiresAtMs: resolvedExpiresAtMs,
+        expiresAt: task.expiresAt || new Date(resolvedExpiresAtMs).toISOString()
       });
 
-      if (updated?.onTimeout?.action) {
-        await runAction(bailey, updated.onTimeout.action, {
-          taskId: updated.id,
-          to: updated.to,
-          reason: "timeout"
-        });
+      if (!updated?.onTimeout?.action) {
+        continue;
       }
+
+      let timeoutActionResult = null;
+      try {
+        timeoutActionResult = await runActionWithRetries({
+          bailey,
+          action: updated.onTimeout.action,
+          context: {
+            taskId: updated.id,
+            to: updated.to,
+            reason: "timeout"
+          },
+          onCreateTask: createTaskFromSend,
+          attempts: timeoutActionRetryAttempts,
+          delayMs: timeoutActionRetryDelayMs
+        });
+      } catch (error) {
+        timeoutActionResult = {
+          ok: false,
+          error: error?.message || "TIMEOUT_ACTION_FAILED"
+        };
+      }
+
+      const previousActionResult =
+        updated.actionResult && typeof updated.actionResult === "object"
+          ? updated.actionResult
+          : {};
+
+      updateTask(updated.id, {
+        actionResult: {
+          ...previousActionResult,
+          timeout: timeoutActionResult
+        }
+      });
+
+      if (timeoutActionResult?.ok) {
+        console.log(
+          `${formatTimestampBR(new Date())} TASK_TIMEOUT_ACTION_OK id=${updated.id} to=${updated.to} attempts=${timeoutActionResult._attemptsUsed || 1}`
+        );
+      } else {
+        console.error(
+          `${formatTimestampBR(new Date())} TASK_TIMEOUT_ACTION_FAILED id=${updated.id} to=${updated.to} error=${timeoutActionResult?.error || "unknown"}`
+        );
+      }
+    }
+  };
+
+  const runMaintenanceLoop = async () => {
+    if (loopRunning) return;
+    loopRunning = true;
+    try {
+      await expirePendingTasks();
+      cleanupFinishedTasks();
+    } finally {
+      loopRunning = false;
     }
   };
 
@@ -471,7 +738,7 @@ export function createResponseTaskService({
 
         const response = parseResponseFromMessage(message);
         if (!response) {
-          logTaskRelated(senderJid, "<sem conteudo parseavel>", false);
+          logTaskRelated(senderJid, "<no-parseable-content>", false);
           continue;
         }
 
@@ -484,9 +751,11 @@ export function createResponseTaskService({
         })();
 
         const now = nowMs();
-        const pendingTasks = getAllTasks()
-          .filter((t) => t.status === "pending")
+        const activeTasks = getAllTasks()
+          .filter((t) => ["pending", "persistent"].includes(t.status))
           .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+
+        const pendingTasks = activeTasks.filter((t) => t.status === "pending");
 
         let tasks = [];
         if (response.replyToMessageId) {
@@ -500,11 +769,11 @@ export function createResponseTaskService({
         }
 
         if (tasks.length === 0) {
-          tasks = pendingTasks.filter((t) => sameActor(t.to, normalizedSender));
+          tasks = activeTasks.filter((t) => sameActor(t.to, normalizedSender));
         }
 
         if (tasks.length === 0) {
-          const byExpected = pendingTasks.filter((t) => matchesExpected(t.expected || [], response));
+          const byExpected = activeTasks.filter((t) => matchesExpected(t.expected || [], response));
           if (byExpected.length === 1) {
             tasks = byExpected;
             logTaskDebug(
@@ -513,14 +782,14 @@ export function createResponseTaskService({
           }
         }
 
-        logTaskRelated(senderJid, response.text || response.key || "<sem conteudo>", tasks.length > 0);
+        logTaskRelated(senderJid, response.text || response.key || "<no-content>", tasks.length > 0);
 
         logTaskDebug(
-          `msg sender=${normalizedSender} key=${response.key || "-"} text=${response.text || "-"} stanza=${response.replyToMessageId || "-"} pending=${pendingTasks.length} candidates=${tasks.length}`
+          `msg sender=${normalizedSender} key=${response.key || "-"} text=${response.text || "-"} stanza=${response.replyToMessageId || "-"} active=${activeTasks.length} candidates=${tasks.length}`
         );
 
         for (const task of tasks) {
-          if (task.expiresAtMs && task.expiresAtMs <= now) {
+          if (task.status === "pending" && task.expiresAtMs && task.expiresAtMs <= now) {
             updateTask(task.id, {
               status: "expired",
               expiredAt: new Date().toISOString()
@@ -544,19 +813,53 @@ export function createResponseTaskService({
             selected: matched
           };
 
-          updateTask(task.id, {
-            status: "attending",
-            attendingAt: new Date().toISOString()
-          });
+          if (task.status === "pending") {
+            updateTask(task.id, {
+              status: "attending",
+              attendingAt: new Date().toISOString()
+            });
+          }
 
           let actionResult = null;
           if (matched.action) {
-            actionResult = await runAction(bailey, matched.action, context);
+            try {
+              actionResult = await runAction({
+                bailey,
+                action: matched.action,
+                context,
+                onCreateTask: createTaskFromSend
+              });
+            } catch (error) {
+              actionResult = {
+                ok: false,
+                error: error?.message || "ACTION_EXECUTION_FAILED"
+              };
+            }
           }
 
           logTaskDebug(
-            `task=${task.id} matched=${matched.key || matched.aliases?.[0] || "alias"} action=${matched.action ? "yes" : "no"}`
+            `task=${task.id} status=${task.status} matched=${matched.key || matched.aliases?.[0] || "alias"} action=${matched.action ? "yes" : "no"}`
           );
+
+          if (task.status === "persistent") {
+            cancelOtherTemporaryTasks({
+              to: task.to,
+              reason: "persistent_command_triggered"
+            });
+
+            updateTask(task.id, {
+              status: "persistent",
+              selected: {
+                key: matched.key,
+                aliases: matched.aliases
+              },
+              response,
+              actionResult,
+              lastTriggeredAt: new Date().toISOString(),
+              triggerCount: (Number(task.triggerCount) || 0) + 1
+            });
+            break;
+          }
 
           updateTask(task.id, {
             status: "completed",
@@ -566,13 +869,15 @@ export function createResponseTaskService({
               aliases: matched.aliases
             },
             response,
-            actionResult
+            actionResult,
+            lastTriggeredAt: new Date().toISOString(),
+            triggerCount: (Number(task.triggerCount) || 0) + 1
           });
 
           break;
         }
       } catch {
-        // nunca deixa erro de parsing derrubar o processo
+        // do not let parse/action errors crash the process
       }
     }
   };
@@ -582,9 +887,13 @@ export function createResponseTaskService({
       if (started) return;
       started = true;
       bailey.on("messages.upsert", onMessagesUpsert);
-      interval = setInterval(async () => {
-        await expirePendingTasks();
-        cleanupFinishedTasks();
+      void runMaintenanceLoop().catch((error) => {
+        console.error("[taskService] startup loop error:", error?.message || error);
+      });
+      interval = setInterval(() => {
+        void runMaintenanceLoop().catch((error) => {
+          console.error("[taskService] loop error:", error?.message || error);
+        });
       }, 1000);
     },
 
@@ -599,54 +908,38 @@ export function createResponseTaskService({
     },
 
     createFromSend({ requestBody, sendResult }) {
-      const cfg = requestBody?.awaitResponse;
-      if (!cfg || cfg === false) {
-        return null;
+      return createTaskFromSend({ requestBody, sendResult });
+    },
+
+    createPersistentCommand({ to, expected, action, notes = null }) {
+      const normalizedTo = normalizeJid(to);
+      const items = normalizeExpected(Array.isArray(expected) ? expected : []);
+      if (!items.length) {
+        throw new Error("PERSISTENT_EXPECTED_REQUIRED");
       }
 
-      const to = normalizeJid(requestBody?.to || sendResult?.to);
-      const ttl = Number(cfg.timeoutMs) || timeoutMs;
       const createdAtMs = nowMs();
-
-      const inferredContent =
-        requestBody?.content && typeof requestBody.content === "object"
-          ? requestBody.content
-          : null;
-
-      const inferred = inferExpectedFromContent(inferredContent);
-      const expected = normalizeExpected(
-        Array.isArray(cfg.expected) && cfg.expected.length ? cfg.expected : inferred
-      );
-
-      if (!expected.length) {
-        throw new Error("AWAIT_RESPONSE_EXPECTED_REQUIRED");
-      }
-
       const task = {
         id: randomUUID(),
-        status: "pending",
-        to,
-        scope: inferScopeFromJid(to),
-        requestBodyType: requestBody?.type || "auto",
-        sentMessageId: sendResult?.messageId || null,
-        expected,
-        onTimeout:
-          cfg?.onTimeout && typeof cfg.onTimeout === "object"
-            ? cfg.onTimeout
-            : null,
+        status: "persistent",
+        to: normalizedTo,
+        scope: inferScopeFromJid(normalizedTo),
+        requestBodyType: "persistent_command",
+        sentMessageId: null,
+        expected: items,
+        onTimeout: null,
         createdAt: new Date(createdAtMs).toISOString(),
         createdAtMs,
-        expiresAt: new Date(createdAtMs + ttl).toISOString(),
-        expiresAtMs: createdAtMs + ttl,
-        timeoutMs: ttl,
-        updatedAt: new Date(createdAtMs).toISOString()
+        expiresAt: null,
+        expiresAtMs: null,
+        timeoutMs: null,
+        updatedAt: new Date(createdAtMs).toISOString(),
+        notes: notes ? String(notes) : null,
+        triggerCount: 0,
+        lastTriggeredAt: null
       };
 
-      saveTask(task);
-      console.log(
-        `${formatTimestampBR(new Date())} TASK_CREATED id=${task.id} to=${task.to} sentMessageId=${task.sentMessageId || "-"} timeoutMs=${task.timeoutMs}`
-      );
-      return task;
+      return saveTask(task);
     },
 
     list({ status, to } = {}) {
@@ -658,6 +951,20 @@ export function createResponseTaskService({
       });
     },
 
+    stats() {
+      const tasks = getAllTasks();
+      const byStatus = tasks.reduce((acc, task) => {
+        const key = task.status || "unknown";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+      return {
+        total: tasks.length,
+        byStatus
+      };
+    },
+
     get(taskId) {
       return getTaskById(taskId);
     },
@@ -665,6 +972,14 @@ export function createResponseTaskService({
     cancel(taskId) {
       const task = getTaskById(taskId);
       if (!task) return null;
+      if (task.status === "persistent") {
+        const updatedPersistent = updateTask(taskId, {
+          status: "cancelled",
+          cancelledAt: new Date().toISOString()
+        });
+        return updatedPersistent;
+      }
+
       const updated = updateTask(taskId, {
         status: "cancelled",
         cancelledAt: new Date().toISOString()

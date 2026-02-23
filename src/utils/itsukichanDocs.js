@@ -1,7 +1,10 @@
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
-const DOCS_PATH = path.resolve(process.cwd(), "ITSUKICHAN.md");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DOCS_PATH = path.resolve(__dirname, "../../ITSUKICHAN.md");
 
 function slugifyHeading(text) {
   return String(text || "")

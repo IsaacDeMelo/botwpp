@@ -5,7 +5,7 @@
 <title>QR JSON Viewer</title>
 <style>
   body {
-    font-family: Arial;
+    font-family: Arial, sans-serif;
     max-width: 900px;
     margin: 40px auto;
     text-align: center;
@@ -13,9 +13,10 @@
 
   textarea {
     width: 100%;
-    height: 200px;
-    font-family: monospace;
+    height: 220px;
+    font-family: Consolas, monospace;
     padding: 10px;
+    box-sizing: border-box;
   }
 
   button {
@@ -29,10 +30,15 @@
     margin-top: 20px;
   }
 
-  img, svg {
+  img, svg, canvas {
     max-width: 100%;
   }
+
+  #error {
+    color: #b00020;
+  }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -45,30 +51,56 @@
 <div id="result"></div>
 
 <script>
+function showError(message) {
+  const resultDiv = document.getElementById("result");
+  resultDiv.innerHTML = `<p id="error">${message}</p>`;
+}
+
 function renderImage() {
   const input = document.getElementById("jsonInput").value;
   const resultDiv = document.getElementById("result");
-
   resultDiv.innerHTML = "";
 
+  let parsed;
   try {
-    const parsed = JSON.parse(input);
+    parsed = JSON.parse(input);
+  } catch {
+    showError("JSON inv·lido.");
+    return;
+  }
 
-    if (parsed.format === "svg" && parsed.svg) {
-      resultDiv.innerHTML = parsed.svg;
-    } 
-    else if (parsed.format === "png_data_url" && parsed.dataUrl) {
-      const img = document.createElement("img");
-      img.src = parsed.dataUrl;
-      resultDiv.appendChild(img);
-    } 
-    else {
-      resultDiv.innerHTML = "<p style='color:red'>Formato n√£o reconhecido.</p>";
+  if (parsed && parsed.format === "svg" && parsed.svg) {
+    resultDiv.innerHTML = parsed.svg;
+    return;
+  }
+
+  if (parsed && parsed.format === "png_data_url" && parsed.dataUrl) {
+    const img = document.createElement("img");
+    img.src = parsed.dataUrl;
+    img.alt = "QR";
+    resultDiv.appendChild(img);
+    return;
+  }
+
+  if (parsed && typeof parsed.qr === "string" && parsed.qr.trim()) {
+    if (typeof QRCode === "undefined") {
+      showError("Biblioteca de QR n„o carregada.");
+      return;
     }
 
-  } catch (err) {
-    resultDiv.innerHTML = "<p style='color:red'>JSON inv√°lido.</p>";
+    const holder = document.createElement("div");
+    resultDiv.appendChild(holder);
+
+    new QRCode(holder, {
+      text: parsed.qr,
+      width: 360,
+      height: 360,
+      correctLevel: QRCode.CorrectLevel.L
+    });
+    return;
   }
+
+  showError("Formato n„o reconhecido. Use {\"qr\":\"...\"}, svg ou png_data_url.");
 }
 </script>
 

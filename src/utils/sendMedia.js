@@ -1,49 +1,26 @@
-// src/bailey/sendMedia.js
+﻿// src/bailey/sendMedia.js
 import { normalizeJid } from "./normalizeJid.js";
 import { parseMentions } from "./parseMentions.js";
 import { normalizeMediaInput } from "./normalizeMediaInput.js";
 import { normalizeSvgImageToPng } from "./svgToPng.js";
+import { applyTypingPresence } from "./sendPresence.js";
 
 /**
- * Envia mensagens de mídia:
- * - image
- * - video
- * - audio
- * - document
- *
- * Suporta:
- * - caption / text
- * - menções @{numero}
- * - qualquer campo extra do Baileys
- *
- * @param {BaileyClient} bailey
- * @param {Object} payload
+ * Envia mensagens de mídia.
  */
 export async function sendMedia(
   bailey,
   {
     to,
-
-    // tipo da mídia (OBRIGATÓRIO)
-    mediaType, // "image" | "video" | "audio" | "document"
-
-    // conteúdo da mídia (OBRIGATÓRIO)
-    media, // { url } | Buffer | Stream
-
-    // texto opcional
+    mediaType,
+    media,
     caption,
     text,
-
-    // mimetype opcional
     mimetype,
-
-    // flags comuns
     gifPlayback,
     ptv,
     viewOnce,
     options = {},
-
-    // qualquer outro campo (footer, title, shop, collection, etc)
     ...extraContent
   }
 ) {
@@ -85,17 +62,11 @@ export async function sendMedia(
     }
   }
 
-  // ===============================
-  // BASE DO PAYLOAD
-  // ===============================
   const content = {
     [payloadMediaType]: payloadMedia,
     ...extraContent
   };
 
-  // ===============================
-  // CAPTION / TEXTO + MENÇÕES
-  // ===============================
   const rawCaption =
     typeof caption === "string"
       ? caption
@@ -112,15 +83,11 @@ export async function sendMedia(
     }
   }
 
-  // ===============================
-  // FLAGS OPCIONAIS
-  // ===============================
   if (mimetype) content.mimetype = mimetype;
   if (!mimetype && safeMediaType === "image" && payloadMediaType === "image") {
-    content.mimetype =
-      convertedFromSvg
-        ? "image/png"
-        : normalized.detectedMimeType || content.mimetype;
+    content.mimetype = convertedFromSvg
+      ? "image/png"
+      : normalized.detectedMimeType || content.mimetype;
   }
   if (!mimetype && !content.mimetype && normalized.detectedMimeType) {
     content.mimetype = normalized.detectedMimeType;
@@ -131,6 +98,8 @@ export async function sendMedia(
   if (gifPlayback) content.gifPlayback = true;
   if (ptv) content.ptv = true;
   if (viewOnce) content.viewOnce = true;
+
+  await applyTypingPresence(sock, jid, rawCaption || mediaType);
 
   const result = await sock.sendMessage(jid, content, options);
 

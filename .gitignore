@@ -89,3 +89,10 @@ coverage/
 *.bak
 *.old
 *.orig
+
+# ===============================
+# LOCAL TASK DB
+# ===============================
+data/tasks.db
+data/tasks.db-shm
+data/tasks.db-wal

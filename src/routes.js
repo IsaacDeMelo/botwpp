@@ -1,5 +1,4 @@
-// src/routes.js
-import { sendAny } from "./utils/sendAny.js";
+﻿import { sendAny } from "./utils/sendAny.js";
 import QRCode from "qrcode";
 import {
   getDocsIndex,
@@ -7,6 +6,7 @@ import {
   searchDocs
 } from "./utils/itsukichanDocs.js";
 import { createResponseTaskService } from "./tasks/responseTaskService.js";
+import { initTaskStore } from "./tasks/taskStore.js";
 
 function toBinaryString(text) {
   return Array.from(Buffer.from(String(text), "utf-8"))
@@ -16,16 +16,18 @@ function toBinaryString(text) {
 
 export default async function routes(app, opts) {
   const { bailey } = opts;
-  const taskService = createResponseTaskService({
+  await initTaskStore();
+
+  const taskService = opts.taskService || createResponseTaskService({
     bailey,
     defaultTimeoutMs: 20_000,
     cleanupRetentionMs: 5 * 60_000
   });
-  taskService.start();
 
-  // ===============================
-  // ROTAS (TODAS JÁ PROTEGIDAS)
-  // ===============================
+  if (!opts.taskService) {
+    taskService.start();
+  }
+
   app.post("/bailey/start", async () => {
     await bailey.start();
     return { status: "starting" };
@@ -103,9 +105,6 @@ export default async function routes(app, opts) {
     }
   });
 
-  // ===============================
-  // DOCS ITSUKICHAN (PESQUISA)
-  // ===============================
   app.get("/docs/index", async (req, reply) => {
     try {
       const { q = "", level } = req.query || {};
@@ -155,9 +154,6 @@ export default async function routes(app, opts) {
     }
   });
 
-  // ===============================
-  // TAREFAS DE RESPOSTA (WEBHOOK)
-  // ===============================
   app.get("/tasks", async (req) => {
     const { status, to } = req.query || {};
     const items = taskService.list({ status, to });
@@ -166,6 +162,8 @@ export default async function routes(app, opts) {
       items
     };
   });
+
+  app.get("/tasks/stats", async () => taskService.stats());
 
   app.get("/tasks/:id", async (req, reply) => {
     const task = taskService.get(req.params.id);
@@ -197,12 +195,43 @@ export default async function routes(app, opts) {
     return { status: "deleted" };
   });
 
-  // ===============================
-  // ROTAS QUE EXIGEM BAILEY ONLINE
-  // ===============================
-  app.register(async function protectedRoutes(protectedApp) {
+  app.post("/tasks/permanent", async (req, reply) => {
+    try {
+      const { to, expected, action, notes } = req.body || {};
 
-    // apenas o guard do Bailey agora
+      if (!to) {
+        return reply.code(400).send({ error: "TO_REQUIRED" });
+      }
+
+      const expectedList = Array.isArray(expected)
+        ? expected
+        : [
+            {
+              key: "",
+              aliases: [String(req.body?.trigger || "").trim()],
+              action
+            }
+          ];
+
+      const created = taskService.createPersistentCommand({
+        to,
+        expected: expectedList,
+        action,
+        notes
+      });
+
+      return {
+        status: "created",
+        task: created
+      };
+    } catch (error) {
+      return reply.code(400).send({
+        error: error.message
+      });
+    }
+  });
+
+  app.register(async function protectedRoutes(protectedApp) {
     protectedApp.addHook("preHandler", protectedApp.baileyGuard);
 
     protectedApp.post("/bailey/restart", async () => {

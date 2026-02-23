@@ -1,17 +1,16 @@
-// server.js
-import "dotenv/config";
+﻿import "dotenv/config";
 import Fastify from "fastify";
 import routes from "./src/routes.js";
 import { createBailey } from "./src/bailey/config.js";
 import { baileyGuard } from "./src/bailey/middleware.js";
 import { authGuard } from "./src/middleware/authGuard.js";
+import { createResponseTaskService } from "./src/tasks/responseTaskService.js";
+import { initTaskStore } from "./src/tasks/taskStore.js";
+import { registerUiRoutes } from "./src/ui/siteRoutes.js";
 
 const BASE_PORT = Number(process.env.PORT) || 3000;
 
-// ===============================
-// Criar app
-// ===============================
-function buildApp() {
+async function buildApp() {
   const app = Fastify({
     logger: {
       transport: {
@@ -21,28 +20,29 @@ function buildApp() {
     }
   });
 
-  // ===============================
-  // Bailey client
-  // ===============================
   const bailey = createBailey({
     authDir: "./auth",
     browserName: "ITSUKI-API"
   });
 
-  // ===============================
-  // Decorators
-  // ===============================
+  await initTaskStore();
+  const uiTaskService = createResponseTaskService({
+    bailey,
+    defaultTimeoutMs: 20_000,
+    cleanupRetentionMs: 5 * 60_000
+  });
+  uiTaskService.start();
+
   app.decorate("bailey", bailey);
   app.decorate("baileyGuard", baileyGuard(bailey));
 
-  // ===============================
-  // Auth global
-  // ===============================
-  app.addHook("preHandler", authGuard());
+  app.addHook("onSend", async (req, reply, payload) => {
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("x-frame-options", "DENY");
+    reply.header("referrer-policy", "no-referrer");
+    return payload;
+  });
 
-  // ===============================
-  // Error handler
-  // ===============================
   app.setErrorHandler((error, req, reply) => {
     app.log.error(error);
 
@@ -68,36 +68,40 @@ function buildApp() {
       });
   });
 
-  // ===============================
-  // Rotas
-  // ===============================
-  app.get("/", async () => ({
-    status: "ok",
-    service: "mid-itsuki-baileys-api",
-    qrRenderFormats: [
-      "png_base64",
-      "png_data_url",
-      "svg",
-      "base64url",
-      "base64",
-      "raw",
-      "binary"
-    ]
-  }));
+  registerUiRoutes(app, {
+    bailey,
+    taskService: uiTaskService
+  });
 
-  app.register(routes, {
-    prefix: "/api",
-    bailey
+  app.register(async function apiProtected(apiApp) {
+    apiApp.addHook("preHandler", authGuard());
+
+    apiApp.get("/api", async () => ({
+      status: "ok",
+      service: "mid-itsuki-baileys-api",
+      qrRenderFormats: [
+        "png_base64",
+        "png_data_url",
+        "svg",
+        "base64url",
+        "base64",
+        "raw",
+        "binary"
+      ]
+    }));
+
+    apiApp.register(routes, {
+      prefix: "/api",
+      bailey,
+      taskService: uiTaskService
+    });
   });
 
   return app;
 }
 
-// ===============================
-// Start com fallback
-// ===============================
 async function start(port = BASE_PORT) {
-  const app = buildApp();
+  const app = await buildApp();
 
   try {
     await app.listen({
@@ -105,12 +109,10 @@ async function start(port = BASE_PORT) {
       host: "0.0.0.0"
     });
 
-    app.log.info(`API rodando na porta ${port}`);
-
+    app.log.info(`API running on port ${port}`);
   } catch (err) {
-
     if (err.code === "EADDRINUSE") {
-      console.warn(`⚠️ Porta ${port} ocupada, tentando ${port + 1}...`);
+      console.warn(`Port ${port} in use, trying ${port + 1}...`);
       return start(port + 1);
     }
 

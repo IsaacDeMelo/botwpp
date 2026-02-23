@@ -1,12 +1,18 @@
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { extractPhoneNumber } from "../utils/normalizeJid.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BLACKLIST_DIR = path.resolve(__dirname, "../blacklist");
+
 const blacklistWords = JSON.parse(
-  fs.readFileSync("./src/blacklist/words.json", "utf-8")
+  fs.readFileSync(path.join(BLACKLIST_DIR, "words.json"), "utf-8")
 );
 
 const blacklistNumbers = JSON.parse(
-  fs.readFileSync("./src/blacklist/numbers.json", "utf-8")
+  fs.readFileSync(path.join(BLACKLIST_DIR, "numbers.json"), "utf-8")
 );
 const blacklistNumbersSet = new Set(
   blacklistNumbers

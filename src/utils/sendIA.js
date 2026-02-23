@@ -7,6 +7,7 @@ import { sendInteractive } from "./sendInteractive.js";
 const API_URL = "https://apifreellm.com/api/v1/chat";
 const API_KEY = process.env.APIFREELLM_API_KEY;
 const MAX_RETRIES = 3;
+const IA_REQUEST_TIMEOUT_MS = Number(process.env.IA_REQUEST_TIMEOUT_MS) || 12_000;
 const ALLOWED_MEDIA_TYPES = new Set([
   "image",
   "video",
@@ -195,14 +196,18 @@ RESPONDA SOMENTE NO FORMATO E SEMPRE use ; entre campos. Nunca escreva list= ou 
 
       console.log(`🤖 IA tentativa ${i}/${MAX_RETRIES}`);
 
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), IA_REQUEST_TIMEOUT_MS);
+
       const res = await fetch(API_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${API_KEY}`
         },
-        body: JSON.stringify({ message: prompt })
-      });
+        body: JSON.stringify({ message: prompt }),
+        signal: controller.signal
+      }).finally(() => clearTimeout(timeout));
 
       const bodyText = await res.text();
       let data = {};

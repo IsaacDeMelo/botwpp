@@ -1,1 +1,0 @@
-id,status,to,scope,requestBodyType,sentMessageId,expectedJson,onTimeoutJson,selectedJson,responseJson,actionResultJson,createdAt,createdAtMs,expiresAt,expiresAtMs,timeoutMs,updatedAt,attendingAt,completedAt,expiredAt,cancelledAt,notes
