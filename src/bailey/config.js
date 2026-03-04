@@ -2,7 +2,8 @@ import {
   makeWASocket,
   Browsers,
   DisconnectReason,
-  useMultiFileAuthState
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion
 } from "@itsukichan/baileys";
 import { Boom } from "@hapi/boom";
 import fs from "fs";
@@ -222,13 +223,22 @@ export class BaileyClient {
     this._lastFreshRecoveryAt = 0;
     this._sessionSeq = 0;
     this._activeSessionSeq = 0;
+    this._browserProfiles = [
+      () => Browsers.ubuntu(this.browserName),
+      () => Browsers.windows(this.browserName),
+      () => Browsers.appropriate(this.browserName)
+    ];
+    this._browserProfileIndex = 0;
     this.connectionInfo = {
       hasStoredCreds: false,
+      waVersion: null,
+      waVersionIsLatest: null,
       lastUpdateAt: null,
       lastOpenAt: null,
       lastCloseAt: null,
       lastDisconnectCode: null,
       lastDisconnectLabel: null,
+      lastDisconnectMessage: null,
       shouldReconnect: false,
       reconnectAttempts: 0,
       freshSessionRecoveries: 0,
@@ -287,6 +297,19 @@ export class BaileyClient {
 
   _invalidateSocketSession() {
     this._activeSessionSeq += 1;
+  }
+
+  _resolveBrowserTuple() {
+    const profileFactory = this._browserProfiles[this._browserProfileIndex] || this._browserProfiles[0];
+    try {
+      return profileFactory();
+    } catch {
+      return Browsers.ubuntu(this.browserName);
+    }
+  }
+
+  _rotateBrowserProfile() {
+    this._browserProfileIndex = (this._browserProfileIndex + 1) % this._browserProfiles.length;
   }
 
   async _tryFreshSessionRecovery(triggerLabel) {
@@ -411,10 +434,21 @@ export class BaileyClient {
       }
 
       const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+      const { version, isLatest } = await fetchLatestBaileysVersion({ timeout: 6000 });
+      const waVersion = Array.isArray(version) ? version.join(".") : null;
+      this._setConnectionInfo({
+        waVersion,
+        waVersionIsLatest: Boolean(isLatest)
+      });
+      this._logConnection("wa_version_selected", {
+        waVersion: waVersion || "-",
+        isLatest: Boolean(isLatest)
+      });
 
       this.sock = makeWASocket({
         auth: state,
-        browser: Browsers.ubuntu(this.browserName),
+        browser: this._resolveBrowserTuple(),
+        version,
         printQRInTerminal: false,
         syncFullHistory: this.syncFullHistory,
         markOnlineOnConnect: this.markOnlineOnConnect
@@ -475,6 +509,11 @@ export class BaileyClient {
             lastDisconnect?.error instanceof Boom
               ? lastDisconnect.error.output.statusCode
               : null;
+          const reasonMessage = String(
+            lastDisconnect?.error?.message ||
+            lastDisconnect?.error?.output?.payload?.message ||
+            ""
+          ).trim() || null;
           const classified = mapDisconnectReason(reason);
           const shouldReconnect = Boolean(classified.shouldReconnect);
 
@@ -487,6 +526,7 @@ export class BaileyClient {
             lastCloseAt: new Date().toISOString(),
             lastDisconnectCode: reason,
             lastDisconnectLabel: classified.label,
+            lastDisconnectMessage: reasonMessage,
             shouldReconnect,
             reconnectAttempts: shouldReconnect
               ? (Number(this.connectionInfo.reconnectAttempts) || 0) + 1
@@ -500,7 +540,8 @@ export class BaileyClient {
             label: classified.label,
             shouldReconnect,
             reconnectAttempts: this.connectionInfo.reconnectAttempts,
-            hasStoredCreds: this.connectionInfo.hasStoredCreds
+            hasStoredCreds: this.connectionInfo.hasStoredCreds,
+            message: reasonMessage || "-"
           });
 
           this.emitter.emit("disconnected", {
@@ -637,11 +678,33 @@ export class BaileyClient {
   }
 
   async startFresh() {
-    await this.start({
-      force: true,
-      freshAuth: true
-    });
-    return this.waitForAuthSignal(12_000);
+    let lastSignal = null;
+
+    for (let attempt = 0; attempt < this._browserProfiles.length; attempt += 1) {
+      await this.start({
+        force: true,
+        freshAuth: true
+      });
+
+      const signal = await this.waitForAuthSignal(12_000);
+      lastSignal = signal;
+
+      const shouldTryNextBrowser =
+        signal?.kind === "disconnected" &&
+        Number(signal?.details?.reason) === 405;
+
+      if (!shouldTryNextBrowser) {
+        return signal;
+      }
+
+      this._logConnection("start_fresh_retry_next_browser", {
+        attempt: attempt + 1,
+        reason: signal?.details?.reason
+      });
+      this._rotateBrowserProfile();
+    }
+
+    return lastSignal || { kind: "timeout" };
   }
 
   getQRCode() {

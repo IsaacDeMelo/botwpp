@@ -29,8 +29,12 @@ export default async function routes(app, opts) {
   }
 
   app.post("/bailey/start", async () => {
-    await bailey.start();
-    const authSignal = await bailey.waitForAuthSignal(12_000);
+    const status = bailey.getStatus();
+    const info = bailey.getConnectionInfo();
+    const shouldFresh = status === "logged_out" || Boolean(info?.sessionLikelyInvalid);
+    const authSignal = shouldFresh
+      ? await bailey.startFresh()
+      : (await bailey.start(), await bailey.waitForAuthSignal(12_000));
     return {
       status: bailey.getStatus(),
       authSignal,

@@ -548,6 +548,7 @@ textarea#builderTimeoutText{min-height:72px}
     const s = String(status || '').toLowerCase();
     const data = info && typeof info === 'object' ? info : {};
     const rawReason = String(data.lastDisconnectLabel || '-');
+    const reasonMessage = String(data.lastDisconnectMessage || '').trim();
     const reasonMap = {
       session_invalid_405: 'sessao invalida (codigo 405)',
       logged_out: 'logout detectado',
@@ -589,7 +590,7 @@ textarea#builderTimeoutText{min-height:72px}
 
     if (s === 'logged_out' || data.sessionLikelyInvalid) {
       return {
-        text: 'Sessao invalida ou encerrada. Motivo: ' + reason + '. Gere novo QR para voltar.',
+        text: 'Sessao invalida ou encerrada. Motivo: ' + reason + (reasonMessage ? ' (' + reasonMessage + ')' : '') + '. Gere novo QR para voltar.',
         kind: 'err'
       };
     }
@@ -958,7 +959,14 @@ textarea#builderTimeoutText{min-height:72px}
   async function fullRefresh(forceQr) {
     await refreshStatus();
     await refreshExamples();
-    await refreshTasksPreview();
+    if (state.baileyStatus === 'connected' || state.baileyStatus === 'connecting') {
+      await refreshTasksPreview();
+    } else {
+      el.tasksPreview.textContent = JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        notice: 'Task monitor pausado enquanto o bot nao esta conectado.'
+      }, null, 2);
+    }
     await refreshQr(Boolean(forceQr));
   }
 
@@ -969,7 +977,9 @@ textarea#builderTimeoutText{min-height:72px}
     state.statusTimer = setInterval(async () => {
       try {
         await refreshStatus();
-        await refreshTasksPreview();
+        if (state.baileyStatus === 'connected' || state.baileyStatus === 'connecting') {
+          await refreshTasksPreview();
+        }
       } catch {}
     }, 4000);
 
@@ -1315,14 +1325,11 @@ export function registerUiRoutes(app, { bailey, taskService }) {
 
         if (shouldKickAuthFlow) {
           if (status === "logged_out" || Boolean(info?.sessionLikelyInvalid)) {
-            await bailey.start({
-              force: true,
-              freshAuth: true
-            });
+            await bailey.startFresh();
           } else {
             await bailey.start();
+            await bailey.waitForAuthSignal(8_000);
           }
-          await bailey.waitForAuthSignal(8_000);
           qr = bailey.getQRCode();
         }
       }
@@ -1350,8 +1357,12 @@ export function registerUiRoutes(app, { bailey, taskService }) {
     });
 
     uiApp.post("/bailey/start", async () => {
-      await bailey.start();
-      const authSignal = await bailey.waitForAuthSignal(12_000);
+      const status = bailey.getStatus();
+      const info = bailey.getConnectionInfo();
+      const shouldFresh = status === "logged_out" || Boolean(info?.sessionLikelyInvalid);
+      const authSignal = shouldFresh
+        ? await bailey.startFresh()
+        : (await bailey.start(), await bailey.waitForAuthSignal(12_000));
       return {
         status: bailey.getStatus(),
         authSignal,
