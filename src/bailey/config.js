@@ -220,6 +220,8 @@ export class BaileyClient {
     this._reconnectTimer = null;
     this._reconnectDelayMs = Number(options.reconnectDelayMs) || DEFAULT_RECONNECT_DELAY_MS;
     this._lastFreshRecoveryAt = 0;
+    this._sessionSeq = 0;
+    this._activeSessionSeq = 0;
     this.connectionInfo = {
       hasStoredCreds: false,
       lastUpdateAt: null,
@@ -276,6 +278,15 @@ export class BaileyClient {
       .map(([k, v]) => `${k}=${v === null || v === undefined ? "-" : String(v)}`)
       .join(" ");
     console.log(`[BAILEY ${now}] ${event}${extra ? ` | ${extra}` : ""}`);
+  }
+
+  _isSocketSessionActive(sessionSeq, sockRef) {
+    if (!sessionSeq || !sockRef) return false;
+    return this._activeSessionSeq === sessionSeq && this.sock === sockRef;
+  }
+
+  _invalidateSocketSession() {
+    this._activeSessionSeq += 1;
   }
 
   async _tryFreshSessionRecovery(triggerLabel) {
@@ -363,7 +374,14 @@ export class BaileyClient {
     }
   }
 
-  async start() {
+  async start(options = {}) {
+    const force = Boolean(options?.force);
+    const freshAuth = Boolean(options?.freshAuth);
+
+    if (force && (this._starting || this.sock || this.status === "connecting" || this.status === "connected")) {
+      await this.stop();
+    }
+
     if (this.status === "connecting" || this.status === "connected") {
       return;
     }
@@ -371,18 +389,13 @@ export class BaileyClient {
       return;
     }
 
-    const previousStatus = this.status;
     this._starting = true;
     this.status = "connecting";
     this._clearReconnectTimer();
 
-    if (
-      previousStatus === "logged_out" &&
-      this.connectionInfo?.sessionLikelyInvalid &&
-      this._hasStoredCreds()
-    ) {
-      this._logConnection("start_with_invalid_session_detected", {
-        action: "destroy_stored_auth"
+    if (freshAuth || (this.connectionInfo?.sessionLikelyInvalid && this._hasStoredCreds())) {
+      this._logConnection("start_with_fresh_auth", {
+        freshAuth
       });
       this.destroySession();
     }
@@ -406,8 +419,14 @@ export class BaileyClient {
         syncFullHistory: this.syncFullHistory,
         markOnlineOnConnect: this.markOnlineOnConnect
       });
+      const sessionSeq = ++this._sessionSeq;
+      const sockRef = this.sock;
+      this._activeSessionSeq = sessionSeq;
 
       this.sock.ev.on("connection.update", (update) => {
+        if (!this._isSocketSessionActive(sessionSeq, sockRef)) {
+          return;
+        }
         const { connection, qr, lastDisconnect } = update;
 
         if (connection === "connecting") {
@@ -511,6 +530,9 @@ export class BaileyClient {
       });
 
       this.sock.ev.on("messages.upsert", async (event) => {
+        if (!this._isSocketSessionActive(sessionSeq, sockRef)) {
+          return;
+        }
         try {
           await this._logIncomingMessages(event);
         } catch {
@@ -536,10 +558,17 @@ export class BaileyClient {
   async stop() {
     this._starting = false;
     this._clearReconnectTimer();
-    if (!this.sock) return;
+    const currentSock = this.sock;
+    this._invalidateSocketSession();
+    if (!currentSock) {
+      this.sock = null;
+      this.status = "closed";
+      this.qrCode = null;
+      return;
+    }
 
     try {
-      this.sock.end();
+      currentSock.end();
     } catch {}
 
     this.sock = null;
@@ -552,17 +581,20 @@ export class BaileyClient {
   }
 
   async restart() {
-    await this.stop();
-    await this.start();
+    await this.start({
+      force: true
+    });
   }
 
   async logout({ destroy = false } = {}) {
     this._starting = false;
     this._clearReconnectTimer();
+    this._invalidateSocketSession();
 
-    if (this.sock) {
+    const currentSock = this.sock;
+    if (currentSock) {
       try {
-        await this.sock.logout();
+        await currentSock.logout();
       } catch {}
     }
 
@@ -589,14 +621,27 @@ export class BaileyClient {
 
   destroySession() {
     this._clearReconnectTimer();
+    this._invalidateSocketSession();
     if (fs.existsSync(this.authDir)) {
       fs.rmSync(this.authDir, { recursive: true, force: true });
     }
+    this.sock = null;
+    this.qrCode = null;
+    this.status = "logged_out";
     this._setConnectionInfo({
       hasStoredCreds: false,
       needsQr: true,
-      sessionLikelyInvalid: true
+      sessionLikelyInvalid: true,
+      shouldReconnect: false
     });
+  }
+
+  async startFresh() {
+    await this.start({
+      force: true,
+      freshAuth: true
+    });
+    return this.waitForAuthSignal(12_000);
   }
 
   getQRCode() {

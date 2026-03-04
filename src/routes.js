@@ -29,12 +29,6 @@ export default async function routes(app, opts) {
   }
 
   app.post("/bailey/start", async () => {
-    const info = bailey.getConnectionInfo();
-    if (bailey.getStatus() === "logged_out" || info?.sessionLikelyInvalid) {
-      await bailey.stop();
-      bailey.destroySession();
-    }
-
     await bailey.start();
     const authSignal = await bailey.waitForAuthSignal(12_000);
     return {
@@ -248,21 +242,29 @@ export default async function routes(app, opts) {
 
     protectedApp.post("/bailey/restart", async () => {
       await bailey.restart();
-      return { status: "restarting" };
+      const authSignal = await bailey.waitForAuthSignal(12_000);
+      return {
+        status: bailey.getStatus(),
+        authSignal,
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     protectedApp.post("/bailey/logout", async () => {
       await bailey.logout({ destroy: true });
-      await bailey.start();
-      return { status: "restarting_session" };
+      const authSignal = await bailey.startFresh();
+      return {
+        status: bailey.getStatus(),
+        authSignal,
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     protectedApp.post("/bailey/reset-auth", async () => {
-      await bailey.stop();
-      bailey.destroySession();
-      await bailey.start();
+      const authSignal = await bailey.startFresh();
       return {
-        status: "auth_reset",
+        status: bailey.getStatus(),
+        authSignal,
         connection: bailey.getConnectionInfo()
       };
     });

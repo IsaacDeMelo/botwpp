@@ -1314,7 +1314,14 @@ export function registerUiRoutes(app, { bailey, taskService }) {
           Boolean(info?.sessionLikelyInvalid);
 
         if (shouldKickAuthFlow) {
-          await bailey.start();
+          if (status === "logged_out" || Boolean(info?.sessionLikelyInvalid)) {
+            await bailey.start({
+              force: true,
+              freshAuth: true
+            });
+          } else {
+            await bailey.start();
+          }
           await bailey.waitForAuthSignal(8_000);
           qr = bailey.getQRCode();
         }
@@ -1343,12 +1350,6 @@ export function registerUiRoutes(app, { bailey, taskService }) {
     });
 
     uiApp.post("/bailey/start", async () => {
-      const info = bailey.getConnectionInfo();
-      if (bailey.getStatus() === "logged_out" || info?.sessionLikelyInvalid) {
-        await bailey.stop();
-        bailey.destroySession();
-      }
-
       await bailey.start();
       const authSignal = await bailey.waitForAuthSignal(12_000);
       return {
@@ -1370,22 +1371,24 @@ export function registerUiRoutes(app, { bailey, taskService }) {
 
     uiApp.post("/bailey/logout", async () => {
       await bailey.logout({ destroy: true });
-      await bailey.start();
-      return { status: "restarting_session" };
+      const authSignal = await bailey.startFresh();
+      return {
+        status: bailey.getStatus(),
+        authSignal,
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     uiApp.post("/bailey/reset-auth", async () => {
-      await bailey.stop();
-
       if (fs.existsSync(authDirPath)) {
         fs.rmSync(authDirPath, { recursive: true, force: true });
       }
-
       clearAllPanelSessions();
-      await bailey.start();
+      const authSignal = await bailey.startFresh();
 
       return {
-        status: "auth_reset",
+        status: bailey.getStatus(),
+        authSignal,
         baileyStatus: bailey.getStatus(),
         connection: bailey.getConnectionInfo()
       };
