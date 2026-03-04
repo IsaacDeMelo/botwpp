@@ -74,10 +74,18 @@ export function baileyGuard(bailey) {
       });
     }
 
+    if (status === "reconnecting") {
+      return reply.code(503).send({
+        error: "BOT_RECONNECTING",
+        message: "Conexao instavel. Tentando reconectar com a sessao existente."
+      });
+    }
+
     // OFFLINE
     if (status !== "connected") {
       return reply.code(503).send({
-        error: "BOT_OFFLINE"
+        error: "BOT_OFFLINE",
+        message: "Cliente WhatsApp offline no momento."
       });
     }
 

@@ -34,7 +34,8 @@ export default async function routes(app, opts) {
   });
 
   app.get("/bailey/status", async () => ({
-    status: bailey.getStatus()
+    status: bailey.getStatus(),
+    connection: bailey.getConnectionInfo()
   }));
 
   app.get("/bailey/qr", async () => ({
@@ -240,9 +241,19 @@ export default async function routes(app, opts) {
     });
 
     protectedApp.post("/bailey/logout", async () => {
-      await bailey.logout();
+      await bailey.logout({ destroy: true });
       await bailey.start();
       return { status: "restarting_session" };
+    });
+
+    protectedApp.post("/bailey/reset-auth", async () => {
+      await bailey.stop();
+      bailey.destroySession();
+      await bailey.start();
+      return {
+        status: "auth_reset",
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     protectedApp.post("/bailey/shutdown", async () => {

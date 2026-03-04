@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import QRCode from "qrcode";
 import { sendAny } from "../utils/sendAny.js";
 
@@ -168,6 +170,11 @@ function clearAttempts(ip) {
   loginState.delete(ip);
 }
 
+function clearAllPanelSessions() {
+  loginState.clear();
+  sessions.clear();
+}
+
 function uiPageHtml({ scriptNonce }) {
   return `<!doctype html>
 <html lang="pt-BR">
@@ -231,7 +238,7 @@ button{cursor:pointer;border:none;background:var(--action);font-weight:700;trans
 button:hover{filter:brightness(1.08)}
 button:disabled{opacity:.6;cursor:not-allowed}
 button.ghost{background:var(--action-2)}
-.toolbar{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.toolbar{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
 .pill{
   display:inline-flex;
   align-items:center;
@@ -253,6 +260,7 @@ button.ghost{background:var(--action-2)}
 .state{min-height:20px;font-size:13px;color:var(--muted)}
 .state.ok{color:var(--ok)}
 .state.err{color:var(--err)}
+.state.info{color:var(--info)}
 .qr-box{
   min-height:360px;
   border:1px dashed #36506f;
@@ -313,10 +321,12 @@ textarea#builderTimeoutText{min-height:72px}
         <button data-action="restart">Restart</button>
         <button data-action="logout">Logout+Start</button>
         <button data-action="shutdown" class="ghost">Shutdown</button>
+        <button id="resetAuthBtn" class="ghost">Reset Auth</button>
         <button id="logoutBtn" class="ghost">Sair</button>
       </div>
       <div style="height:10px"></div>
       <div id="controlMsg" class="state">Pronto.</div>
+      <div id="statusDetail" class="state"></div>
       <div class="kpi">
         <div class="item"><div id="taskTotal" class="n">0</div><div class="l">Tasks total</div></div>
         <div class="item"><div id="pendingCount" class="n">0</div><div class="l">Pending</div></div>
@@ -462,6 +472,7 @@ textarea#builderTimeoutText{min-height:72px}
     loginBtn: document.getElementById('loginBtn'),
     loginMsg: document.getElementById('loginMsg'),
     controlMsg: document.getElementById('controlMsg'),
+    statusDetail: document.getElementById('statusDetail'),
     statusDot: document.getElementById('statusDot'),
     baileyStatus: document.getElementById('baileyStatus'),
     taskTotal: document.getElementById('taskTotal'),
@@ -472,6 +483,7 @@ textarea#builderTimeoutText{min-height:72px}
     toggleQrAutoBtn: document.getElementById('toggleQrAutoBtn'),
     examples: document.getElementById('examples'),
     refreshBtn: document.getElementById('refreshBtn'),
+    resetAuthBtn: document.getElementById('resetAuthBtn'),
     logoutBtn: document.getElementById('logoutBtn'),
     copyExamplesBtn: document.getElementById('copyExamplesBtn'),
     refreshTasksBtn: document.getElementById('refreshTasksBtn'),
@@ -501,7 +513,8 @@ textarea#builderTimeoutText{min-height:72px}
     qrTimer: null,
     qrAuto: true,
     busyAction: false,
-    baileyStatus: 'unknown'
+    baileyStatus: 'unknown',
+    connection: null
   };
 
   function setMsg(text, kind) {
@@ -517,6 +530,61 @@ textarea#builderTimeoutText{min-height:72px}
   function setBuilderMsg(text, kind) {
     el.builderMsg.textContent = text || '';
     el.builderMsg.className = 'state' + (kind ? ' ' + kind : '');
+  }
+
+  function setStatusDetail(text, kind) {
+    el.statusDetail.textContent = text || '';
+    el.statusDetail.className = 'state' + (kind ? ' ' + kind : '');
+  }
+
+  function toLocalTime(iso) {
+    if (!iso) return '-';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString('pt-BR');
+  }
+
+  function summarizeConnection(status, info) {
+    const s = String(status || '').toLowerCase();
+    const data = info && typeof info === 'object' ? info : {};
+    const reason = String(data.lastDisconnectLabel || '-');
+    const lastUpdate = toLocalTime(data.lastUpdateAt);
+
+    if (s === 'connected') {
+      return {
+        text: 'Sessao conectada e valida. Ultima atualizacao: ' + lastUpdate + '.',
+        kind: 'ok'
+      };
+    }
+
+    if (s === 'connecting' && data.needsQr) {
+      return {
+        text: 'Sessao desconectada. Escaneie o QR para autenticar novamente.',
+        kind: 'info'
+      };
+    }
+
+    if (s === 'reconnecting') {
+      const networkHint = data.networkLikelyIssue
+        ? 'Possivel instabilidade de internet.'
+        : 'Reconexao automatica em andamento.';
+      return {
+        text: 'Tentando reconectar com a sessao atual. ' + networkHint + ' Motivo: ' + reason + '.',
+        kind: 'info'
+      };
+    }
+
+    if (s === 'logged_out' || data.sessionLikelyInvalid) {
+      return {
+        text: 'Sessao invalida ou encerrada. Gere novo QR para voltar.',
+        kind: 'err'
+      };
+    }
+
+    return {
+      text: 'Status: ' + (s || 'unknown') + '. Motivo anterior: ' + reason + '.',
+      kind: 'info'
+    };
   }
 
   function endpointForMode(mode) {
@@ -700,6 +768,9 @@ textarea#builderTimeoutText{min-height:72px}
     document.querySelectorAll('button[data-action]').forEach((btn) => {
       btn.disabled = state.busyAction;
     });
+    if (el.resetAuthBtn) {
+      el.resetAuthBtn.disabled = state.busyAction;
+    }
   }
 
   async function call(url, opts) {
@@ -710,11 +781,16 @@ textarea#builderTimeoutText{min-height:72px}
       ...(req.headers || {})
     };
 
-    const res = await fetch(url, {
-      credentials: 'include',
-      ...req,
-      headers
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        credentials: 'include',
+        ...req,
+        headers
+      });
+    } catch {
+      throw new Error('NETWORK_ERROR');
+    }
 
     const text = await res.text();
     let data = null;
@@ -725,7 +801,10 @@ textarea#builderTimeoutText{min-height:72px}
     }
 
     if (!res.ok) {
-      throw new Error((data && (data.message || data.error)) || ('HTTP_' + res.status));
+      const msg = (data && (data.message || data.error)) || ('HTTP_' + res.status);
+      const err = new Error(msg);
+      err.httpStatus = res.status;
+      throw err;
     }
 
     return data;
@@ -751,7 +830,12 @@ textarea#builderTimeoutText{min-height:72px}
   async function refreshStatus() {
     const st = await call('/ui/api/status');
     state.baileyStatus = String(st.baileyStatus || 'unknown');
+    state.connection = st.connection && typeof st.connection === 'object'
+      ? st.connection
+      : null;
     updateStatusStyle(state.baileyStatus);
+    const summary = summarizeConnection(state.baileyStatus, state.connection);
+    setStatusDetail(summary.text, summary.kind);
 
     const stats = st.taskStats || {};
     const byStatus = stats.byStatus || {};
@@ -838,10 +922,18 @@ textarea#builderTimeoutText{min-height:72px}
     if (!force && (!state.qrAuto || state.baileyStatus !== 'connecting')) {
       return;
     }
+    const needsQr = state.connection && state.connection.needsQr;
+    if (!force && !needsQr) {
+      return;
+    }
     try {
       const q = await call('/ui/api/qr');
       renderQr(q.dataUrl || '', 'QR nao disponivel.');
     } catch (err) {
+      if (String(err.message).includes('NETWORK_ERROR')) {
+        renderQr('', 'Sem conexao com o servidor. Verifique a internet.');
+        return;
+      }
       if (String(err.message).includes('QR_NOT_AVAILABLE')) {
         renderQr('', 'Sem QR no momento. Se necessario, clique Start ou Restart.');
       } else {
@@ -890,10 +982,13 @@ textarea#builderTimeoutText{min-height:72px}
       setMsg('Sessao ativa.', 'ok');
       await fullRefresh(true);
       startPolling();
-    } catch {
+    } catch (error) {
       stopPolling();
       el.loginCard.classList.remove('hidden');
       el.app.classList.add('hidden');
+      if (String(error.message).includes('NETWORK_ERROR')) {
+        setLoginMsg('Servidor indisponivel ou sem internet.', 'err');
+      }
       renderQr('', 'Acesso bloqueado. Faca login para carregar o QR.');
     }
   }
@@ -947,6 +1042,23 @@ textarea#builderTimeoutText{min-height:72px}
       setMsg('Painel atualizado.', 'ok');
     } catch (e) {
       setMsg('Falha ao atualizar: ' + e.message, 'err');
+    }
+  });
+
+  el.resetAuthBtn.addEventListener('click', async () => {
+    const ok = window.confirm('Isso vai limpar credenciais locais e forcar novo QR. Continuar?');
+    if (!ok) return;
+
+    setMsg('Limpando credenciais antigas e reiniciando sessao...', 'info');
+    setBusy(true);
+    try {
+      await call('/ui/api/bailey/reset-auth', { method: 'POST' });
+      await fullRefresh(true);
+      setMsg('Credenciais antigas removidas. Novo QR sera solicitado.', 'ok');
+    } catch (e) {
+      setMsg('Falha ao resetar auth: ' + e.message, 'err');
+    } finally {
+      setBusy(false);
     }
   });
 
@@ -1085,6 +1197,7 @@ export function registerUiRoutes(app, { bailey, taskService }) {
   }
 
   const sessionSecret = crypto.randomBytes(32).toString("hex");
+  const authDirPath = path.resolve(process.cwd(), bailey?.authDir || "./auth");
 
   app.get("/", async (req, reply) => {
     const scriptNonce = crypto.randomBytes(16).toString("base64");
@@ -1163,13 +1276,18 @@ export function registerUiRoutes(app, { bailey, taskService }) {
 
     uiApp.get("/status", async () => ({
       baileyStatus: bailey.getStatus(),
+      connection: bailey.getConnectionInfo(),
       taskStats: taskService.stats()
     }));
 
     uiApp.get("/qr", async (req, reply) => {
       const qr = bailey.getQRCode();
       if (!qr) {
-        return reply.code(404).send({ error: "QR_NOT_AVAILABLE" });
+        return reply.code(404).send({
+          error: "QR_NOT_AVAILABLE",
+          baileyStatus: bailey.getStatus(),
+          connection: bailey.getConnectionInfo()
+        });
       }
 
       const dataUrl = await QRCode.toDataURL(qr, { width: 340, margin: 2 });
@@ -1197,9 +1315,26 @@ export function registerUiRoutes(app, { bailey, taskService }) {
     });
 
     uiApp.post("/bailey/logout", async () => {
-      await bailey.logout();
+      await bailey.logout({ destroy: true });
       await bailey.start();
       return { status: "restarting_session" };
+    });
+
+    uiApp.post("/bailey/reset-auth", async () => {
+      await bailey.stop();
+
+      if (fs.existsSync(authDirPath)) {
+        fs.rmSync(authDirPath, { recursive: true, force: true });
+      }
+
+      clearAllPanelSessions();
+      await bailey.start();
+
+      return {
+        status: "auth_reset",
+        baileyStatus: bailey.getStatus(),
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     uiApp.post("/bailey/shutdown", async () => {
