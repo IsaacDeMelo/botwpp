@@ -29,8 +29,19 @@ export default async function routes(app, opts) {
   }
 
   app.post("/bailey/start", async () => {
+    const info = bailey.getConnectionInfo();
+    if (bailey.getStatus() === "logged_out" || info?.sessionLikelyInvalid) {
+      await bailey.stop();
+      bailey.destroySession();
+    }
+
     await bailey.start();
-    return { status: "starting" };
+    const authSignal = await bailey.waitForAuthSignal(12_000);
+    return {
+      status: bailey.getStatus(),
+      authSignal,
+      connection: bailey.getConnectionInfo()
+    };
   });
 
   app.get("/bailey/status", async () => ({

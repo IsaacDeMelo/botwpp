@@ -1037,8 +1037,17 @@ textarea#builderTimeoutText{min-height:72px}
       setBusy(true);
       setMsg('Executando: ' + action + ' ...');
       try {
-        await call('/ui/api/bailey/' + action, { method: 'POST' });
-        setMsg('Comando executado: ' + action, 'ok');
+        const result = await call('/ui/api/bailey/' + action, { method: 'POST' });
+        const signalKind = result && result.authSignal ? String(result.authSignal.kind || '') : '';
+        if (signalKind === 'qr') {
+          setMsg('Comando executado: ' + action + '. QR gerado para escanear.', 'ok');
+        } else if (signalKind === 'connected') {
+          setMsg('Comando executado: ' + action + '. Sessao conectada.', 'ok');
+        } else if (signalKind === 'timeout') {
+          setMsg('Comando executado: ' + action + '. Aguardando QR/conexao...', 'info');
+        } else {
+          setMsg('Comando executado: ' + action, 'ok');
+        }
         await fullRefresh(true);
       } catch (e) {
         setMsg('Falha em ' + action + ': ' + e.message, 'err');
@@ -1294,7 +1303,23 @@ export function registerUiRoutes(app, { bailey, taskService }) {
     }));
 
     uiApp.get("/qr", async (req, reply) => {
-      const qr = bailey.getQRCode();
+      let qr = bailey.getQRCode();
+      if (!qr) {
+        const status = bailey.getStatus();
+        const info = bailey.getConnectionInfo();
+        const shouldKickAuthFlow =
+          status === "idle" ||
+          status === "closed" ||
+          status === "logged_out" ||
+          Boolean(info?.sessionLikelyInvalid);
+
+        if (shouldKickAuthFlow) {
+          await bailey.start();
+          await bailey.waitForAuthSignal(8_000);
+          qr = bailey.getQRCode();
+        }
+      }
+
       if (!qr) {
         return reply.code(404).send({
           error: "QR_NOT_AVAILABLE",
@@ -1318,13 +1343,29 @@ export function registerUiRoutes(app, { bailey, taskService }) {
     });
 
     uiApp.post("/bailey/start", async () => {
+      const info = bailey.getConnectionInfo();
+      if (bailey.getStatus() === "logged_out" || info?.sessionLikelyInvalid) {
+        await bailey.stop();
+        bailey.destroySession();
+      }
+
       await bailey.start();
-      return { status: "starting" };
+      const authSignal = await bailey.waitForAuthSignal(12_000);
+      return {
+        status: bailey.getStatus(),
+        authSignal,
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     uiApp.post("/bailey/restart", async () => {
       await bailey.restart();
-      return { status: "restarting" };
+      const authSignal = await bailey.waitForAuthSignal(12_000);
+      return {
+        status: bailey.getStatus(),
+        authSignal,
+        connection: bailey.getConnectionInfo()
+      };
     });
 
     uiApp.post("/bailey/logout", async () => {

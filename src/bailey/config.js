@@ -371,9 +371,22 @@ export class BaileyClient {
       return;
     }
 
+    const previousStatus = this.status;
     this._starting = true;
     this.status = "connecting";
     this._clearReconnectTimer();
+
+    if (
+      previousStatus === "logged_out" &&
+      this.connectionInfo?.sessionLikelyInvalid &&
+      this._hasStoredCreds()
+    ) {
+      this._logConnection("start_with_invalid_session_detected", {
+        action: "destroy_stored_auth"
+      });
+      this.destroySession();
+    }
+
     this._setConnectionInfo({
       hasStoredCreds: this._hasStoredCreds(),
       needsQr: false
@@ -410,6 +423,9 @@ export class BaileyClient {
             shouldReconnect: false,
             sessionLikelyInvalid: true,
             networkLikelyIssue: false
+          });
+          this._logConnection("qr_received", {
+            qrLength: String(qr).length
           });
           this.emitter.emit("qr", qr);
         }
@@ -594,6 +610,57 @@ export class BaileyClient {
 
   getSocket() {
     return this.sock;
+  }
+
+  waitForAuthSignal(timeoutMs = 12_000) {
+    if (this.status === "connected") {
+      return Promise.resolve({
+        kind: "connected"
+      });
+    }
+
+    if (this.status === "connecting" && this.qrCode) {
+      return Promise.resolve({
+        kind: "qr",
+        qr: this.qrCode
+      });
+    }
+
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const done = (payload) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        this.off("qr", onQr);
+        this.off("connected", onConnected);
+        this.off("disconnected", onDisconnected);
+        resolve(payload);
+      };
+
+      const onQr = (qr) => done({
+        kind: "qr",
+        qr
+      });
+
+      const onConnected = () => done({
+        kind: "connected"
+      });
+
+      const onDisconnected = (details) => done({
+        kind: "disconnected",
+        details
+      });
+
+      const timer = setTimeout(() => done({
+        kind: "timeout"
+      }), Math.max(2_000, Number(timeoutMs) || 12_000));
+
+      this.on("qr", onQr);
+      this.on("connected", onConnected);
+      this.on("disconnected", onDisconnected);
+    });
   }
 
   getConnectionInfo() {
