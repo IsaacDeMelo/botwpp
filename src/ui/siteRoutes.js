@@ -547,7 +547,20 @@ textarea#builderTimeoutText{min-height:72px}
   function summarizeConnection(status, info) {
     const s = String(status || '').toLowerCase();
     const data = info && typeof info === 'object' ? info : {};
-    const reason = String(data.lastDisconnectLabel || '-');
+    const rawReason = String(data.lastDisconnectLabel || '-');
+    const reasonMap = {
+      session_invalid_405: 'sessao invalida (codigo 405)',
+      logged_out: 'logout detectado',
+      bad_session: 'arquivo de sessao invalido',
+      multidevice_mismatch: 'multidevice nao habilitado',
+      connection_closed: 'conexao encerrada',
+      connection_lost: 'conexao perdida',
+      timed_out: 'timeout de conexao',
+      service_unavailable: 'servico indisponivel',
+      forbidden: 'acesso negado',
+      session_recovery_triggered: 'recuperacao automatica de sessao'
+    };
+    const reason = reasonMap[rawReason] || rawReason;
     const lastUpdate = toLocalTime(data.lastUpdateAt);
 
     if (s === 'connected') {
@@ -559,7 +572,7 @@ textarea#builderTimeoutText{min-height:72px}
 
     if (s === 'connecting' && data.needsQr) {
       return {
-        text: 'Sessao desconectada. Escaneie o QR para autenticar novamente.',
+        text: 'Sessao desconectada ou renovada. QR pronto para autenticar novamente.',
         kind: 'info'
       };
     }
@@ -576,7 +589,7 @@ textarea#builderTimeoutText{min-height:72px}
 
     if (s === 'logged_out' || data.sessionLikelyInvalid) {
       return {
-        text: 'Sessao invalida ou encerrada. Gere novo QR para voltar.',
+        text: 'Sessao invalida ou encerrada. Motivo: ' + reason + '. Gere novo QR para voltar.',
         kind: 'err'
       };
     }

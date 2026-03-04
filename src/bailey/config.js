@@ -11,8 +11,20 @@ import EventEmitter from "events";
 const DEFAULT_AUTH_DIR = "./auth";
 const GROUP_METADATA_TTL_MS = 5 * 60_000;
 const DEFAULT_RECONNECT_DELAY_MS = 2_500;
+const FRESH_SESSION_RECOVERY_COOLDOWN_MS = 5 * 60_000;
+const MAX_RECONNECT_ATTEMPTS_BEFORE_RECOVERY = 6;
 
 function mapDisconnectReason(code) {
+  if (code === 405) {
+    return {
+      label: "session_invalid_405",
+      shouldReconnect: false,
+      sessionLikelyInvalid: true,
+      networkLikelyIssue: false,
+      needsQr: true
+    };
+  }
+
   if (code === DisconnectReason.loggedOut) {
     return {
       label: "logged_out",
@@ -90,6 +102,26 @@ function mapDisconnectReason(code) {
       sessionLikelyInvalid: true,
       networkLikelyIssue: false,
       needsQr: true
+    };
+  }
+
+  if (code === DisconnectReason.forbidden) {
+    return {
+      label: "forbidden",
+      shouldReconnect: false,
+      sessionLikelyInvalid: true,
+      networkLikelyIssue: false,
+      needsQr: true
+    };
+  }
+
+  if (code === DisconnectReason.unavailableService) {
+    return {
+      label: "service_unavailable",
+      shouldReconnect: true,
+      sessionLikelyInvalid: false,
+      networkLikelyIssue: true,
+      needsQr: false
     };
   }
 
@@ -187,6 +219,7 @@ export class BaileyClient {
     this._starting = false;
     this._reconnectTimer = null;
     this._reconnectDelayMs = Number(options.reconnectDelayMs) || DEFAULT_RECONNECT_DELAY_MS;
+    this._lastFreshRecoveryAt = 0;
     this.connectionInfo = {
       hasStoredCreds: false,
       lastUpdateAt: null,
@@ -196,6 +229,7 @@ export class BaileyClient {
       lastDisconnectLabel: null,
       shouldReconnect: false,
       reconnectAttempts: 0,
+      freshSessionRecoveries: 0,
       sessionLikelyInvalid: false,
       networkLikelyIssue: false,
       needsQr: false
@@ -234,6 +268,54 @@ export class BaileyClient {
   _hasStoredCreds() {
     const credsPath = `${this.authDir}/creds.json`;
     return fs.existsSync(credsPath);
+  }
+
+  _logConnection(event, details = {}) {
+    const now = new Date().toISOString();
+    const extra = Object.entries(details)
+      .map(([k, v]) => `${k}=${v === null || v === undefined ? "-" : String(v)}`)
+      .join(" ");
+    console.log(`[BAILEY ${now}] ${event}${extra ? ` | ${extra}` : ""}`);
+  }
+
+  async _tryFreshSessionRecovery(triggerLabel) {
+    const now = Date.now();
+    const withinCooldown = now - this._lastFreshRecoveryAt < FRESH_SESSION_RECOVERY_COOLDOWN_MS;
+    if (withinCooldown) {
+      this._logConnection("recovery_skipped_cooldown", {
+        trigger: triggerLabel
+      });
+      return false;
+    }
+
+    this._lastFreshRecoveryAt = now;
+    this._logConnection("fresh_session_recovery_start", {
+      trigger: triggerLabel
+    });
+
+    try {
+      this.destroySession();
+      this._setConnectionInfo({
+        freshSessionRecoveries: (Number(this.connectionInfo.freshSessionRecoveries) || 0) + 1,
+        lastDisconnectLabel: "session_recovery_triggered",
+        shouldReconnect: false,
+        reconnectAttempts: 0,
+        needsQr: true,
+        sessionLikelyInvalid: true,
+        networkLikelyIssue: false
+      });
+      await this.start();
+      this._logConnection("fresh_session_recovery_done", {
+        trigger: triggerLabel
+      });
+      return true;
+    } catch (error) {
+      this._logConnection("fresh_session_recovery_failed", {
+        trigger: triggerLabel,
+        error: error?.message || "unknown"
+      });
+      return false;
+    }
   }
 
   async _getGroupSubject(groupJid) {
@@ -315,6 +397,12 @@ export class BaileyClient {
       this.sock.ev.on("connection.update", (update) => {
         const { connection, qr, lastDisconnect } = update;
 
+        if (connection === "connecting") {
+          this._logConnection("connection_connecting", {
+            hasStoredCreds: this._hasStoredCreds()
+          });
+        }
+
         if (qr) {
           this.qrCode = qr;
           this._setConnectionInfo({
@@ -340,6 +428,9 @@ export class BaileyClient {
             sessionLikelyInvalid: false,
             networkLikelyIssue: false,
             needsQr: false
+          });
+          this._logConnection("connection_open", {
+            status: this.status
           });
           this.emitter.emit("connected");
         }
@@ -369,6 +460,13 @@ export class BaileyClient {
             networkLikelyIssue: Boolean(classified.networkLikelyIssue),
             needsQr: Boolean(classified.needsQr)
           });
+          this._logConnection("connection_close", {
+            code: reason,
+            label: classified.label,
+            shouldReconnect,
+            reconnectAttempts: this.connectionInfo.reconnectAttempts,
+            hasStoredCreds: this.connectionInfo.hasStoredCreds
+          });
 
           this.emitter.emit("disconnected", {
             reason,
@@ -379,7 +477,19 @@ export class BaileyClient {
           });
 
           if (shouldReconnect) {
+            if ((Number(this.connectionInfo.reconnectAttempts) || 0) >= MAX_RECONNECT_ATTEMPTS_BEFORE_RECOVERY) {
+              void this._tryFreshSessionRecovery("too_many_reconnect_attempts");
+              return;
+            }
             this._scheduleReconnect();
+            this._logConnection("reconnect_scheduled", {
+              delayMs: this._reconnectDelayMs
+            });
+            return;
+          }
+
+          if (classified.sessionLikelyInvalid && this._hasStoredCreds()) {
+            void this._tryFreshSessionRecovery(classified.label);
           }
         }
       });
