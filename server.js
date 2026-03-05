@@ -36,12 +36,14 @@ async function buildApp() {
   app.decorate("bailey", bailey);
   app.decorate("baileyGuard", baileyGuard(bailey));
 
-  try {
-    await bailey.start();
-    app.log.info("Bailey auto-start requested.");
-  } catch (error) {
-    app.log.error(error, "Failed to auto-start Bailey client.");
-  }
+  void bailey
+    .start()
+    .then(() => {
+      app.log.info("Bailey auto-start requested.");
+    })
+    .catch((error) => {
+      app.log.error(error, "Failed to auto-start Bailey client.");
+    });
 
   app.addHook("onSend", async (req, reply, payload) => {
     reply.header("x-content-type-options", "nosniff");
